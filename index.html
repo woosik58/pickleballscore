@@ -125,7 +125,7 @@ input[type=range]{width:100%;accent-color:var(--ball)}
     <div class="prompt" id="prompt" hidden>
       <strong id="promptTxt">랠리 종료 감지 — 누가 이겼나요?</strong>
       <div class="row"><button id="pA">A팀</button><button id="pB">B팀</button></div>
-      <button class="skip" id="pSkip">점수 없음 (무시)</button>
+      <button class="skip" id="pSkip">무효 랠리 (점수 없음)</button>
     </div>
   </section>
 
@@ -156,7 +156,7 @@ input[type=range]{width:100%;accent-color:var(--ball)}
         <div class="toggle"><span>움직임으로 랠리 감지<small>랠리가 끝나면 득점 팀을 바로 물어봐요</small></span><button class="sw" role="switch" aria-checked="false" id="swMotion"></button></div>
         <div class="meter" aria-hidden="true"><i id="meterI"></i><b id="meterB"></b></div>
         <div class="status" id="motionStatus">꺼짐</div>
-        <div class="toggle"><span>음성으로 점수 입력<small>"<span id="vA">A팀</span> 득점", "취소"라고 말하기</small></span><button class="sw" role="switch" aria-checked="false" id="swVoice"></button></div>
+        <div class="toggle"><span>음성으로 점수 입력<small>"<span id="vA">A팀</span>", "서브", "리시브", "무효", "취소"라고 말하기</small></span><button class="sw" role="switch" aria-checked="false" id="swVoice"></button></div>
         <div class="status" id="voiceStatus">꺼짐</div>
       </div>
 
@@ -192,6 +192,7 @@ input[type=range]{width:100%;accent-color:var(--ball)}
         <h3>랠리 감지 조정</h3>
         <label class="f">민감도 <span id="sensV">6</span><input type="range" id="sens" min="1" max="10" value="6"></label>
         <label class="f">조용해진 뒤 랠리 종료 판정 <span id="quietV">2.5초</span><input type="range" id="quiet" min="1" max="6" step="0.5" value="2.5"></label>
+        <label class="f">음성 대기 후 서브팀 자동 승 처리 <span id="waitV">5초</span><input type="range" id="wait" min="2" max="10" step="1" value="5"></label>
         <p class="note">카메라가 흔들리면 감지가 틀어집니다. 삼각대로 고정하고, 막대(노란색)가 빨간 선을 넘을 때 랠리 중으로 판단해요.</p>
       </div>
       <div class="box">
@@ -221,7 +222,7 @@ const cam=$('#cam'), out=$('#out'), octx=out.getContext('2d');
 const LS={get(k,d){try{const v=localStorage.getItem('pbcam.'+k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem('pbcam.'+k,JSON.stringify(v))}catch(e){}}};
 
 /* ---------- 설정 ---------- */
-const cfg=Object.assign({nameA:'A팀',nameB:'B팀',colA:'#3aa8ff',colB:'#ff8a3a',mode:'doubles',target:11,facing:'environment',res:'720',mic:true,sens:6,quiet:2.5,pre:10,post:2,all:false},LS.get('cfg',{}));
+const cfg=Object.assign({nameA:'A팀',nameB:'B팀',colA:'#3aa8ff',colB:'#ff8a3a',mode:'doubles',target:11,facing:'environment',res:'720',mic:true,sens:6,quiet:2.5,wait:5,pre:10,post:2,all:false},LS.get('cfg',{}));
 function saveCfg(){LS.set('cfg',cfg);paintTeams();}
 
 /* ---------- 경기 상태 ---------- */
@@ -243,7 +244,7 @@ function rallyWon(w,source){
   else if(cfg.mode==='doubles'&&S.server===1){S.server=2;}
   else{S.serving=1-S.serving;S.server=1;}
   const t=recording?recTime():null;
-  const ev={t,winner:w,scored,call:callStr(),score:[...S.score],game:S.game,clipStart:null};
+  const ev={t,winner:w,scored,call:callStr(),score:[...S.score],game:S.game,clipStart:null,src:source};
   if(pending&&t!=null){ev.t=Math.min(t,pending.end+0.5);ev.clipStart=pending.start;}
   S.events.push(ev);
   if(scored){flash={team:w,until:performance.now()+1200};}
@@ -276,7 +277,7 @@ function render(){
   $('#callV').textContent=S.over?'GAME':callStr();
   $('#gameV').textContent=`${S.game} (${S.gameWins[0]}:${S.gameWins[1]})`;
   const log=$('#log');const evs=S.events.slice(-30).reverse();
-  log.innerHTML=evs.length?evs.map(e=>`<span>${e.t!=null?fmt(e.t):'--:--'} · G${e.game} · ${esc(names()[e.winner])} ${e.scored?'<b style="color:var(--ball)">득점</b>':'랠리 승'} → ${e.score[0]}:${e.score[1]}</span>`).join(''):'<span>아직 기록이 없어요.</span>';
+  log.innerHTML=evs.length?evs.map(e=>`<span>${e.t!=null?fmt(e.t):'--:--'} · G${e.game} · ${esc(names()[e.winner])} ${e.scored?'<b style="color:var(--ball)">득점</b>':'랠리 승'} → ${e.score[0]}:${e.score[1]}${e.src==='auto'?' <i style="font-style:normal;color:var(--b)">(자동)</i>':e.src==='voice'?' (음성)':''}</span>`).join(''):'<span>아직 기록이 없어요.</span>';
 }
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -393,9 +394,13 @@ setInterval(()=>{
 function onRallyEnd(start,end){
   if(S.over)return;
   pending={start,end};beep(660,.12);
-  $('#prompt').hidden=false;clearTimeout(pendingTimer);pendingTimer=setTimeout(hidePrompt,9000);
+  clearInterval(pendingTimer);
+  let left=+cfg.wait;const srvName=names()[S.serving];
+  const upd=()=>{$('#promptTxt').textContent=`랠리 종료 — ${left}초 뒤 서브팀(${srvName}) 승으로 처리`;};
+  upd();$('#prompt').hidden=false;
+  pendingTimer=setInterval(()=>{left--;if(left<=0){clearInterval(pendingTimer);rallyWon(S.serving,'auto');}else upd();},1000);
 }
-function hidePrompt(){$('#prompt').hidden=true;pending=null;clearTimeout(pendingTimer);}
+function hidePrompt(){$('#prompt').hidden=true;pending=null;clearInterval(pendingTimer);}
 
 /* ---------- 음성 인식 ---------- */
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;let sr=null,voiceOn=false;
@@ -412,6 +417,9 @@ function handleVoice(raw){
   $('#voiceStatus').innerHTML=`들은 말: <em>${esc(raw)}</em>`;
   const n=s=>s.replace(/\s/g,'').toLowerCase();
   if(/취소|되돌|잘못/.test(t))return undo();
+  if(/무효|노카운트|다시|렛/.test(t)){if(pending){hidePrompt();toast('이번 랠리는 무효 처리했어요');}return;}
+  if(/리시브|받는팀|리턴/.test(t))return rallyWon(1-S.serving,'voice');
+  if(/서브/.test(t))return rallyWon(S.serving,'voice');
   const isA=t.includes(n(cfg.nameA))||/a팀|에이|^a$/.test(t), isB=t.includes(n(cfg.nameB))||/b팀|비팀|^비$|^b$/.test(t);
   if(isA&&!isB)rallyWon(0,'voice');else if(isB&&!isA)rallyWon(1,'voice');
 }
@@ -559,7 +567,9 @@ $('#tA').onclick=()=>rallyWon(0,'tap');$('#tB').onclick=()=>rallyWon(1,'tap');
 $('#pA').onclick=()=>rallyWon(0,'prompt');$('#pB').onclick=()=>rallyWon(1,'prompt');$('#pSkip').onclick=hidePrompt;
 $('#undo').onclick=undo;$('#newGame').onclick=newGame;
 $('#swapSrv').onclick=()=>{snapshot();S.serving=1-S.serving;S.server=cfg.mode==='doubles'&&S.score[0]+S.score[1]===0?2:1;if(S.score[0]+S.score[1]===0)S.firstServer=S.serving;save();render();};
-$('#swMotion').onclick=()=>{motionOn=!motionOn;setSw('#swMotion',motionOn);if(!motionOn){$('#motionStatus').textContent='꺼짐';inRally=false;}};
+$('#swMotion').onclick=()=>{motionOn=!motionOn;setSw('#swMotion',motionOn);
+  if(!motionOn){$('#motionStatus').textContent='꺼짐';inRally=false;hidePrompt();}
+  else if(!voiceOn&&SR){voiceOn=true;setSw('#swVoice',true);startVoice();toast('음성 입력도 함께 켰어요');}};
 $('#swVoice').onclick=()=>{voiceOn=!voiceOn;setSw('#swVoice',voiceOn);if(voiceOn)startVoice();else{try{sr&&sr.stop();}catch(e){}$('#voiceStatus').textContent='꺼짐';}};
 $('#swMic').onclick=()=>{cfg.mic=!cfg.mic;setSw('#swMic',cfg.mic);saveCfg();if(stream)startCam();};
 $('#swAll').onclick=()=>{cfg.all=!cfg.all;setSw('#swAll',cfg.all);saveCfg();};
@@ -567,7 +577,8 @@ const bind=(id,key,fn=v=>v)=>{const el=$(id);el.value=cfg[key];el.addEventListen
 bind('#iA','nameA');bind('#iB','nameB');bind('#cA','colA');bind('#cB','colB');
 bind('#mode','mode');bind('#target','target',Number);bind('#facing','facing');bind('#res','res');
 bind('#pre','pre',Number);bind('#post','post',Number);
-bind('#sens','sens',Number);bind('#quiet','quiet',Number);
+bind('#sens','sens',Number);bind('#quiet','quiet',Number);bind('#wait','wait',Number);
+$('#wait').addEventListener('input',()=>$('#waitV').textContent=cfg.wait+'초');$('#waitV').textContent=cfg.wait+'초';
 $('#sens').addEventListener('input',()=>$('#sensV').textContent=cfg.sens);$('#quiet').addEventListener('input',()=>$('#quietV').textContent=cfg.quiet+'초');
 $('#sensV').textContent=cfg.sens;$('#quietV').textContent=cfg.quiet+'초';
 ['#facing','#res'].forEach(id=>$(id).addEventListener('change',()=>{if(stream)startCam();}));
