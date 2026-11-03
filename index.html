@@ -31,6 +31,11 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 #out{max-width:100%;max-height:100%;display:block;background:#000}
 @media (orientation:portrait),(max-width:760px){ #out{width:100%;height:auto;max-height:62vh} }
 #cam{position:absolute;width:2px;height:2px;opacity:0;pointer-events:none}
+#dbg{position:absolute;pointer-events:none;touch-action:none}
+#dbg.calib{pointer-events:auto;cursor:crosshair}
+.calibbar{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);background:rgba(7,26,30,.94);border:2px solid var(--ball);border-radius:14px;padding:10px 14px;display:flex;gap:12px;align-items:center;justify-content:space-between;width:min(92%,480px);font-weight:700;line-height:1.4}
+.calibbar button{color:var(--muted);text-decoration:underline;flex:none}
+.chips{display:flex;flex-wrap:wrap;gap:8px}.chips .chip{flex:1;min-width:90px}
 .placeholder{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:24px;
   background:repeating-linear-gradient(90deg,transparent 0 48%,rgba(255,255,255,.06) 48% 52%,transparent 52%),var(--court)}
 .placeholder h1{font-family:var(--f-num);font-size:44px;letter-spacing:.04em;margin:0;line-height:1}
@@ -116,6 +121,8 @@ input[type=range]{width:100%;accent-color:var(--ball)}
   <section class="stage" id="stage">
     <video id="cam" playsinline muted autoplay></video>
     <canvas id="out" width="1280" height="720"></canvas>
+    <canvas id="dbg" hidden></canvas>
+    <div class="calibbar" id="calibBar" hidden><span id="calibTxt"></span><button id="calibX">취소</button></div>
     <div class="placeholder" id="ph">
       <h1>PICKLE<b>CAM</b></h1>
       <p>휴대폰을 삼각대에 고정하고 코트 전체가 보이게 비춰 주세요. 점수판이 영상에 함께 녹화됩니다.</p>
@@ -158,6 +165,9 @@ input[type=range]{width:100%;accent-color:var(--ball)}
         <div class="status" id="motionStatus">꺼짐</div>
         <div class="toggle"><span>음성으로 점수 입력<small>"<span id="vA">A팀</span>", "서브", "리시브", "무효", "취소"라고 말하기</small></span><button class="sw" role="switch" aria-checked="false" id="swVoice"></button></div>
         <div class="status" id="voiceStatus">꺼짐</div>
+        <div class="toggle"><span>선수 위치로 서브팀 확인 (복식)<small>서브팀은 둘 다 베이스라인, 리시브팀은 한 명이 키친 앞</small></span><button class="sw" role="switch" aria-checked="false" id="swPos"></button></div>
+        <div class="chips"><button class="chip" id="calibBtn">코트 맞추기</button><button class="chip" id="swapSide">코트 교대</button><button class="chip" id="showPos">인식 표시</button></div>
+        <div class="status" id="posStatus">꺼짐</div>
       </div>
 
       <div class="box">
@@ -226,7 +236,7 @@ const cfg=Object.assign({nameA:'A팀',nameB:'B팀',colA:'#3aa8ff',colB:'#ff8a3a'
 function saveCfg(){LS.set('cfg',cfg);paintTeams();}
 
 /* ---------- 경기 상태 ---------- */
-const fresh=()=>({score:[0,0],serving:0,server:2,gameWins:[0,0],games:[],game:1,over:false,firstServer:0,events:[]});
+const fresh=()=>({score:[0,0],serving:0,server:2,gameWins:[0,0],games:[],game:1,over:false,firstServer:0,events:[],swap:false});
 let S=Object.assign(fresh(),LS.get('match',{}));
 let hist=[];
 const names=()=>[cfg.nameA,cfg.nameB], cols=()=>[cfg.colA,cfg.colB];
@@ -235,7 +245,7 @@ function callStr(){const s=S.serving,r=1-s;return cfg.mode==='doubles'?`${S.scor
 function gamePoint(){const t=cfg.target;const can=w=>S.score[w]>=t-1&&S.score[w]-S.score[1-w]>=1;return cfg.mode==='rally'?(can(0)||can(1)):can(S.serving);}
 let flash={team:-1,until:0}, banner={txt:'',until:0};
 
-function rallyWon(w,source){
+function rallyWon(w,source,keep){
   if(S.over){toast('게임이 끝났어요. "다음 게임"을 눌러 주세요');return;}
   snapshot();
   let scored=false;
@@ -246,6 +256,7 @@ function rallyWon(w,source){
   const t=recording?recTime():null;
   const ev={t,winner:w,scored,call:callStr(),score:[...S.score],game:S.game,clipStart:null,src:source};
   if(pending&&t!=null){ev.t=Math.min(t,pending.end+0.5);ev.clipStart=pending.start;}
+  if(keep){ev.t=keep.t;ev.clipStart=keep.clipStart;}
   S.events.push(ev);
   if(scored){flash={team:w,until:performance.now()+1200};}
   else banner={txt:cfg.mode==='doubles'&&S.server===2?'2번 서버':'사이드 아웃',until:performance.now()+1500};
@@ -257,7 +268,7 @@ function rallyWon(w,source){
 function undo(){if(!hist.length){toast('되돌릴 기록이 없어요');return;}S=JSON.parse(hist.pop());save();render();toast('되돌렸어요');}
 function newGame(){
   snapshot();S.games.push([...S.score]);S.game++;S.score=[0,0];S.over=false;
-  S.firstServer=1-S.firstServer;S.serving=S.firstServer;S.server=cfg.mode==='doubles'?2:1;
+  S.firstServer=1-S.firstServer;S.serving=S.firstServer;S.swap=!S.swap;S.server=cfg.mode==='doubles'?2:1;
   save();render();toast(`게임 ${S.game} 시작`);
 }
 function save(){LS.set('match',S);}
@@ -291,7 +302,7 @@ async function startCam(){
     cam.srcObject=stream;await cam.play();
     $('#ph').hidden=true;
     await document.fonts.ready;
-    const sz=()=>{if(cam.videoWidth){out.width=cam.videoWidth;out.height=cam.videoHeight;}};sz();cam.onresize=sz;
+    const sz=()=>{if(cam.videoWidth){out.width=cam.videoWidth;out.height=cam.videoHeight;buildH();}};sz();cam.onresize=sz;
     try{await navigator.wakeLock?.request('screen');}catch(e){}
   }catch(e){toast('카메라를 켤 수 없어요. 브라우저의 카메라 권한을 허용해 주세요');console.error(e);}
 }
@@ -337,6 +348,7 @@ function drawOverlay(c,W,H){
 }
 function loop(){
   if(cam.readyState>=2){octx.drawImage(cam,0,0,out.width,out.height);drawOverlay(octx,out.width,out.height);}
+  drawDbg();
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
@@ -385,7 +397,7 @@ setInterval(()=>{
   const T=thr(),now=performance.now(),rt=recording?recTime():0;
   $('#meterI').style.width=Math.min(100,ema/(T*2)*100)+'%';$('#meterB').style.left='50%';
   if(!inRally){
-    if(ema>T){aboveSince||=now;if(now-aboveSince>600){inRally=true;rallyStart=Math.max(0,rt-0.6);quietSince=0;}}else aboveSince=0;
+    if(ema>T){aboveSince||=now;if(now-aboveSince>600){inRally=true;rallyStart=Math.max(0,rt-0.6);quietSince=0;onRallyStart();}}else aboveSince=0;
   }else{
     if(ema<T*0.7){quietSince||=now;if(now-quietSince>cfg.quiet*1000){inRally=false;aboveSince=0;onRallyEnd(rallyStart,Math.max(0,rt-cfg.quiet));}}else quietSince=0;
   }
@@ -422,6 +434,133 @@ function handleVoice(raw){
   if(/서브/.test(t))return rallyWon(S.serving,'voice');
   const isA=t.includes(n(cfg.nameA))||/a팀|에이|^a$/.test(t), isB=t.includes(n(cfg.nameB))||/b팀|비팀|^비$|^b$/.test(t);
   if(isA&&!isB)rallyWon(0,'voice');else if(isB&&!isA)rallyWon(1,'voice');
+}
+
+/* ---------- 선수 위치로 서브팀 인식 ---------- */
+const NEAR=13; // 네트에서 13ft(키친 7ft + 여유) 안쪽이면 '앞'
+const COURT=[[0,0],[20,0],[20,44],[0,44]];
+const dbg=$('#dbg'),dctx=dbg.getContext('2d');
+let posOn=false,posModel=null,posBusy=false,posHist=[],lastDet=null,calibMode=0,calibPts=[],Hc=null,Hinv=null;
+const halfTeam=h=>S.swap?1-h:h;
+function loadScript(src){return new Promise((res,rej)=>{const el=document.createElement('script');el.src=src;el.onload=res;el.onerror=()=>rej(new Error(src));document.head.appendChild(el);});}
+async function ensureModel(){
+  if(posModel)return posModel;
+  $('#posStatus').textContent='인식 모델 불러오는 중… (처음 한 번, 몇 초 걸려요)';
+  if(!window.tf)await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js');
+  if(!window.cocoSsd)await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js');
+  posModel=await cocoSsd.load({base:'lite_mobilenet_v2'});return posModel;
+}
+function solveH(src,dst){
+  const A=[],b=[];
+  for(let i=0;i<4;i++){const[x,y]=src[i],[u,v]=dst[i];A.push([x,y,1,0,0,0,-u*x,-u*y]);b.push(u);A.push([0,0,0,x,y,1,-v*x,-v*y]);b.push(v);}
+  for(let i=0;i<8;i++){
+    let m=i;for(let r=i+1;r<8;r++)if(Math.abs(A[r][i])>Math.abs(A[m][i]))m=r;
+    [A[i],A[m]]=[A[m],A[i]];[b[i],b[m]]=[b[m],b[i]];
+    const p=A[i][i];if(Math.abs(p)<1e-12)return null;
+    for(let r=0;r<8;r++){if(r===i)continue;const f=A[r][i]/p;if(!f)continue;for(let c=i;c<8;c++)A[r][c]-=f*A[i][c];b[r]-=f*b[i];}
+  }
+  return [...b.map((v,i)=>v/A[i][i]),1];
+}
+const applyH=(H,x,y)=>{const w=H[6]*x+H[7]*y+H[8];return [(H[0]*x+H[1]*y+H[2])/w,(H[3]*x+H[4]*y+H[5])/w];};
+function buildH(){
+  if(!cfg.calib||cfg.calib.length!==4||!out.width){Hc=Hinv=null;return;}
+  const px=cfg.calib.map(([nx,ny])=>[nx*out.width,ny*out.height]);
+  Hc=solveH(px,COURT);Hinv=solveH(COURT,px);
+}
+function classify(persons){
+  const halves=[[],[]];
+  for(const p of persons){
+    const[x,y,w,h]=p.bbox,fx=x+w/2,fy=y+h;const[cx,cy]=applyH(Hc,fx,fy);
+    if(cx<-6||cx>26||cy<-12||cy>56)continue;
+    halves[cy<22?0:1].push({d:Math.abs(cy-22),fx,fy});
+  }
+  const pat=h=>{if(h.length<2)return null;const ds=h.map(p=>p.d).sort((a,b)=>a-b);
+    if(ds[0]>=NEAR)return 'serve';if(ds[0]<NEAR&&ds[ds.length-1]>=NEAR)return 'recv';return null;};
+  const p0=pat(halves[0]),p1=pat(halves[1]);let srv=null;
+  if(p0==='serve'&&p1!=='serve')srv=0;else if(p1==='serve'&&p0!=='serve')srv=1;
+  else if(p0==='recv'&&p1!=='recv')srv=1;else if(p1==='recv'&&p0!=='recv')srv=0;
+  return {halves,srv};
+}
+function guessServe(){
+  const v=posHist.filter(h=>h.srv!=null);if(v.length<2)return null;
+  const c0=v.filter(h=>h.srv===0).length,half=c0*2>=v.length?0:1,cnt=half===0?c0:v.length-c0;
+  return cnt/v.length>=0.6?halfTeam(half):null;
+}
+function updatePosStatus(){
+  const el=$('#posStatus');
+  if(!posOn){el.textContent='꺼짐';return;}
+  if(!Hc){el.textContent='먼저 "코트 맞추기"로 코트 네 모서리를 찍어 주세요';return;}
+  if(inRally){el.textContent='랠리 중 · 인식 쉬는 중';return;}
+  if(!lastDet){el.textContent='선수를 찾는 중…';return;}
+  const desc=h=>h.length?h.map(p=>p.d<NEAR?'앞':'뒤').join('·'):'없음';
+  const g=guessServe();
+  el.innerHTML=`${esc(names()[halfTeam(0)])} 쪽 ${desc(lastDet.halves[0])} · ${esc(names()[halfTeam(1)])} 쪽 ${desc(lastDet.halves[1])}${g!=null?` → <em>${esc(names()[g])} 서브</em>`:''}`;
+}
+setInterval(async()=>{
+  if(!posOn||!posModel||posBusy||cam.readyState<2||!Hc||inRally)return;
+  posBusy=true;
+  try{
+    const r=await posModel.detect(cam,12,0.35);
+    const c=classify(r.filter(o=>o.class==='person'));const now=performance.now();
+    lastDet={...c,t:now};posHist.push({t:now,srv:c.srv});posHist=posHist.filter(h=>now-h.t<3000);
+    updatePosStatus();
+  }catch(e){console.error(e);}
+  posBusy=false;
+},400);
+function onRallyStart(){
+  // 카운트다운이 끝나기 전에 다음 서브가 시작되면 기본값(서브팀 승)을 먼저 확정
+  if(pending&&!$('#prompt').hidden){clearInterval(pendingTimer);rallyWon(S.serving,'auto');}
+  updatePosStatus();
+  if(!posOn||cfg.mode!=='doubles'||S.over)return;
+  const team=guessServe();posHist=[];
+  if(team==null||team===S.serving)return;
+  const last=S.events[S.events.length-1];
+  if(last&&last.src==='auto'&&hist.length){
+    // 직전 랠리를 '서브팀 승'으로 자동 처리했는데 다른 팀이 서브 → 리시브팀이 이긴 것으로 고침
+    S=JSON.parse(hist.pop());
+    rallyWon(1-S.serving,'pos',{t:last.t,clipStart:last.clipStart});
+    if(S.serving!==team){snapshot();S.serving=team;S.server=1;save();render();}
+    toast(`서브 위치를 보고 고쳤어요: ${names()[team]} 서브`);
+  }else{
+    banner={txt:`${names()[team]} 서브 같아요?`,until:performance.now()+2500};
+    toast(`선수 위치로는 ${names()[team]} 서브예요. 맞으면 "서브 팀 변경"을 눌러 주세요`);
+  }
+}
+const CALIB_TXT=['A팀 쪽 베이스라인의 한쪽 모서리를 누르세요 (1/4)','같은 베이스라인의 반대쪽 모서리 (2/4)','2번에서 사이드라인을 따라간 B팀 쪽 모서리 (3/4)','남은 마지막 모서리 (4/4)'];
+function startCalib(){
+  if(!stream){toast('먼저 카메라를 켜 주세요');return;}
+  calibMode=1;calibPts=[];dbg.classList.add('calib');$('#calibBar').hidden=false;$('#calibTxt').textContent=CALIB_TXT[0];
+}
+function endCalib(){calibMode=0;dbg.classList.remove('calib');$('#calibBar').hidden=true;}
+dbg.addEventListener('pointerdown',e=>{
+  if(!calibMode)return;e.preventDefault();
+  const r=dbg.getBoundingClientRect();calibPts.push([(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height]);
+  if(calibPts.length<4){$('#calibTxt').textContent=CALIB_TXT[calibPts.length];return;}
+  cfg.calib=calibPts;S.swap=false;save();saveCfg();buildH();endCalib();posHist=[];
+  toast(Hc?'코트를 맞췄어요':'모서리를 다시 찍어 주세요');updatePosStatus();
+});
+function drawDbg(){
+  const show=!!calibMode||(posOn&&cfg.showPos);
+  dbg.hidden=!show;if(!show)return;
+  const st=$('#stage').getBoundingClientRect(),r=out.getBoundingClientRect();
+  dbg.style.left=(r.left-st.left)+'px';dbg.style.top=(r.top-st.top)+'px';dbg.style.width=r.width+'px';dbg.style.height=r.height+'px';
+  if(dbg.width!==out.width||dbg.height!==out.height){dbg.width=out.width;dbg.height=out.height;}
+  const c=dctx,W=dbg.width,H=dbg.height,u=Math.min(W,H)/720;c.clearRect(0,0,W,H);
+  if(calibMode){
+    c.fillStyle='rgba(0,0,0,.25)';c.fillRect(0,0,W,H);
+    calibPts.forEach(([nx,ny],i)=>{c.fillStyle='#d7f23a';c.beginPath();c.arc(nx*W,ny*H,10*u,0,7);c.fill();
+      c.fillStyle='#0b1d10';c.font=`800 ${14*u}px sans-serif`;c.textAlign='center';c.textBaseline='middle';c.fillText(i+1,nx*W,ny*H);});
+    return;
+  }
+  if(Hinv){
+    const L=(a,b,col,w)=>{const[x1,y1]=applyH(Hinv,...a),[x2,y2]=applyH(Hinv,...b);c.strokeStyle=col;c.lineWidth=w*u;c.beginPath();c.moveTo(x1,y1);c.lineTo(x2,y2);c.stroke();};
+    [[[0,0],[20,0]],[[20,0],[20,44]],[[20,44],[0,44]],[[0,44],[0,0]],[[10,0],[10,15]],[[10,29],[10,44]]].forEach(([a,b])=>L(a,b,'rgba(215,242,58,.8)',3));
+    L([0,15],[20,15],'rgba(255,77,77,.9)',3);L([0,29],[20,29],'rgba(255,77,77,.9)',3);L([0,22],[20,22],'#ffffff',4);
+    [0,1].forEach(h=>{const[x,y]=applyH(Hinv,10,h?36:8);c.font=`800 ${22*u}px "Noto Sans KR",sans-serif`;c.textAlign='center';c.lineWidth=5*u;c.strokeStyle='rgba(0,0,0,.7)';
+      const t=names()[halfTeam(h)];c.strokeText(t,x,y);c.fillStyle=cols()[halfTeam(h)];c.fillText(t,x,y);});
+  }
+  if(lastDet)lastDet.halves.forEach(hv=>hv.forEach(p=>{const near=p.d<NEAR;c.fillStyle=near?'#ff4d4d':'#3ee07a';c.beginPath();c.arc(p.fx,p.fy,9*u,0,7);c.fill();
+    c.font=`800 ${15*u}px "Noto Sans KR",sans-serif`;c.textAlign='center';c.lineWidth=4*u;c.strokeStyle='rgba(0,0,0,.7)';c.strokeText(near?'앞':'뒤',p.fx,p.fy-16*u);c.fillStyle='#fff';c.fillText(near?'앞':'뒤',p.fx,p.fy-16*u);}));
 }
 
 /* ---------- 효과음 ---------- */
@@ -573,6 +712,17 @@ $('#swMotion').onclick=()=>{motionOn=!motionOn;setSw('#swMotion',motionOn);
 $('#swVoice').onclick=()=>{voiceOn=!voiceOn;setSw('#swVoice',voiceOn);if(voiceOn)startVoice();else{try{sr&&sr.stop();}catch(e){}$('#voiceStatus').textContent='꺼짐';}};
 $('#swMic').onclick=()=>{cfg.mic=!cfg.mic;setSw('#swMic',cfg.mic);saveCfg();if(stream)startCam();};
 $('#swAll').onclick=()=>{cfg.all=!cfg.all;setSw('#swAll',cfg.all);saveCfg();};
+$('#swPos').onclick=async()=>{
+  posOn=!posOn;setSw('#swPos',posOn);
+  if(!posOn){posHist=[];lastDet=null;updatePosStatus();return;}
+  if(cfg.mode!=='doubles')toast('서브팀 위치 확인은 복식에서만 작동해요');
+  try{await ensureModel();updatePosStatus();if(!cfg.calib)startCalib();}
+  catch(e){posOn=false;setSw('#swPos',false);$('#posStatus').textContent='인식 모델을 불러오지 못했어요. 인터넷 연결을 확인해 주세요';}
+};
+$('#calibBtn').onclick=startCalib;$('#calibX').onclick=endCalib;
+$('#swapSide').onclick=()=>{snapshot();S.swap=!S.swap;save();posHist=[];updatePosStatus();toast(`${names()[halfTeam(0)]}이(가) 1·2번 모서리 쪽으로 바뀌었어요`);};
+$('#showPos').onclick=()=>{cfg.showPos=!cfg.showPos;saveCfg();$('#showPos').classList.toggle('on',!!cfg.showPos);};
+$('#showPos').classList.toggle('on',!!cfg.showPos);
 const bind=(id,key,fn=v=>v)=>{const el=$(id);el.value=cfg[key];el.addEventListener('input',()=>{cfg[key]=fn(el.value);saveCfg();render();});};
 bind('#iA','nameA');bind('#iB','nameB');bind('#cA','colA');bind('#cB','colB');
 bind('#mode','mode');bind('#target','target',Number);bind('#facing','facing');bind('#res','res');
