@@ -261,10 +261,23 @@ function callStr(){const s=S.serving,r=1-s;return cfg.mode==='doubles'?`${S.scor
 function gamePoint(){const t=cfg.target;const can=w=>S.score[w]>=t-1&&S.score[w]-S.score[1-w]>=1;return cfg.mode==='rally'?(can(0)||can(1)):can(S.serving);}
 let flash={team:-1,until:0}, banner={txt:'',until:0};
 
-let lastAutoAt=0;
+let lastAutoAt=0,lastDecision={at:-1e9,histLen:-1},pendingAt=0;
+const RANK_LABEL={1:'음성',2:'버튼',3:'위치 보정',4:'버튼·늦음',5:'자동'};
+function rankOf(source){
+  if(source==='voice')return 1;
+  if(source==='pos')return 3;
+  if(source==='auto')return 5;
+  // 사람(버튼): 랠리 종료 창이 뜬 뒤 3초 안이면 2순위, 그 뒤면 4순위
+  if(pending&&!$('#prompt').hidden)return performance.now()-pendingAt<=3000?2:4;
+  return 2; // 랠리 감지 없이 직접 누른 버튼
+}
+// 직전 판정을 되돌릴 수 있는지 (그 뒤에 다른 조작이 없었을 때만)
+function canRedo(){return hist.length&&hist.length===lastDecision.histLen&&S.events.length;}
+function redoLast(){const last=S.events[S.events.length-1];S=JSON.parse(hist.pop());return {t:last.t,clipStart:last.clipStart};}
 function rallyWon(w,source,keep){
   if(source==='auto')lastAutoAt=performance.now();
   if(S.over){toast('게임이 끝났어요. "다음 게임"을 눌러 주세요');return;}
+  const rank=rankOf(source);
   snapshot();
   let scored=false;
   if(cfg.mode==='rally'){S.score[w]++;scored=true;if(S.serving!==w){S.serving=w;}S.server=1;}
@@ -272,7 +285,7 @@ function rallyWon(w,source,keep){
   else if(cfg.mode==='doubles'&&S.server===1){S.server=2;}
   else{S.serving=1-S.serving;S.server=1;}
   const t=recording?recTime():null;
-  const ev={t,winner:w,scored,call:callStr(),score:[...S.score],game:S.game,clipStart:null,src:source};
+  const ev={t,winner:w,scored,call:callStr(),score:[...S.score],game:S.game,clipStart:null,src:source,rank};
   if(pending&&t!=null){ev.t=Math.min(t,pending.end+0.5);ev.clipStart=pending.start;}
   if(keep){ev.t=keep.t;ev.clipStart=keep.clipStart;}
   S.events.push(ev);
@@ -287,6 +300,7 @@ function rallyWon(w,source,keep){
     S.over=true;S.gameWins[w]++;banner={txt:`GAME · ${names()[w]} 승`,until:performance.now()+4000};beep(880,.25);
   }
   hidePrompt();save();render();
+  lastDecision={at:performance.now(),histLen:hist.length};
 }
 function undo(){if(!hist.length){toast('되돌릴 기록이 없어요');return;}S=JSON.parse(hist.pop());save();render();toast('되돌렸어요');}
 function newGame(){
@@ -319,7 +333,7 @@ function render(){
   $('#callV').textContent=S.over?'GAME':callStr();
   $('#gameV').textContent=`${S.game} (${S.gameWins[0]}:${S.gameWins[1]})`;
   const log=$('#log');const evs=S.events.slice(-30).reverse();
-  log.innerHTML=evs.length?evs.map(e=>`<span>${e.t!=null?fmt(e.t):'--:--'} · G${e.game} · ${esc(names()[e.winner])} ${e.scored?'<b style="color:var(--ball)">득점</b>':'랠리 승'} → ${e.score[0]}:${e.score[1]}${e.src==='auto'?' <i style="font-style:normal;color:var(--b)">(자동)</i>':e.src==='voice'?' (음성)':''}</span>`).join(''):'<span>아직 기록이 없어요.</span>';
+  log.innerHTML=evs.length?evs.map(e=>`<span>${e.t!=null?fmt(e.t):'--:--'} · G${e.game} · ${esc(names()[e.winner])} ${e.scored?'<b style="color:var(--ball)">득점</b>':'랠리 승'} → ${e.score[0]}:${e.score[1]}${e.rank?` <i style="font-style:normal;color:${e.rank>=4?'var(--b)':'var(--muted)'}">(${RANK_LABEL[e.rank]})</i>`:''}</span>`).join(''):'<span>아직 기록이 없어요.</span>';
 }
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -489,10 +503,10 @@ setInterval(()=>{
 function onRallyEnd(start,end){
   if(S.over)return;
   if(!rallyValid){rallyValid=true;return;}
-  pending={start,end};beep(660,.12);
+  pending={start,end};pendingAt=performance.now();beep(660,.12);
   clearInterval(pendingTimer);
   let left=+cfg.wait;const srvName=names()[S.serving];
-  const upd=()=>{$('#promptTxt').textContent=`랠리 종료 — ${left}초 뒤 ${srvName} 득점으로 처리 · 서브권이 넘어갔으면 "사이드아웃"`;};
+  const upd=()=>{$('#promptTxt').textContent=`랠리 종료 — 말하거나 3초 안에 눌러 주세요 · ${left}초 뒤 ${srvName} 득점`;};
   $('#pA').textContent=`${names()[0]} ${outcome(0)}`;$('#pB').textContent=`${names()[1]} ${outcome(1)}`;
   upd();$('#prompt').hidden=false;
   pendingTimer=setInterval(()=>{left--;if(left<=0){clearInterval(pendingTimer);rallyWon(S.serving,'auto');}else upd();},1000);
@@ -546,10 +560,14 @@ function handleVoice(alts,isFinal){
   // 움직임 감지를 켠 경우, 점수 명령은 랠리 종료 창이 떠 있을 때만 받음 (주변 대화로 점수가 바뀌는 것 방지)
   let keep=null;
   if(motionOn&&cmd!=='undo'&&cmd!=='void'&&!pending){
-    // 카운트다운이 끝나 자동 처리된 직후(6초 안)에 말하면 자동 처리를 고쳐 줌
+    // 음성이 1순위: 직전 랠리를 버튼·위치·자동으로 판정했어도 다음 서브 전(8초 안)이면 음성으로 바꿈
     const last=S.events[S.events.length-1];
-    if(last&&last.src==='auto'&&now-lastAutoAt<6000&&hist.length){S=JSON.parse(hist.pop());keep={t:last.t,clipStart:last.clipStart};}
+    if(last&&(last.rank||5)>1&&!inRally&&now-lastDecision.at<8000&&canRedo())keep=redoLast();
     else{if(isFinal!==false)voiceBadge('음성: '+raw+' (랠리 종료 후에 말해 주세요)','no');return true;}
+  }
+  if(!keep&&!pending&&cmd!=='undo'&&cmd!=='void'){
+    const last=S.events[S.events.length-1];
+    if(last&&(last.rank||5)>1&&now-lastDecision.at<3000&&canRedo())keep=redoLast();
   }
   lastVoice={key:cmd,at:now};
   if(cmd==='undo'){undo();voiceBadge('음성: 취소','ok');return true;}
@@ -641,15 +659,15 @@ function onRallyStart(){
   if(team==null&&hadDet){rallyValid=false;$('#motionStatus').innerHTML='서브 대형이 아니어서 랠리로 보지 않아요 (선수 이동 중)';return;}
   if(team==null||team===S.serving)return;
   const last=S.events[S.events.length-1];
-  if(last&&last.src==='auto'&&hist.length){
-    // 직전 랠리를 '서브팀 승'으로 자동 처리했는데 다른 팀이 서브 → 리시브팀이 이긴 것으로 고침
-    S=JSON.parse(hist.pop());
-    rallyWon(1-S.serving,'pos',{t:last.t,clipStart:last.clipStart});
+  if(last&&(last.rank||5)>=4&&canRedo()){
+    // 직전 랠리를 늦은 버튼·자동으로 판정했는데 다른 팀이 서브 → 리시브팀이 이긴 것으로 고침
+    const keep=redoLast();
+    rallyWon(1-S.serving,'pos',keep);
     if(S.serving!==team){snapshot();S.serving=team;S.server=1;save();render();}
     toast(`서브 위치를 보고 고쳤어요: ${names()[team]} 서브`);
   }else{
     banner={txt:`${names()[team]} 서브 같아요?`,until:performance.now()+2500};
-    toast(`선수 위치로는 ${names()[team]} 서브예요. 맞으면 "서브 팀 변경"을 눌러 주세요`);
+    toast(`선수 위치로는 ${names()[team]} 서브예요. (${RANK_LABEL[last?last.rank:2]||'직접'} 판정을 우선해 그대로 둬요) 맞으면 "서브 팀 변경"을 눌러 주세요`);
   }
 }
 const CALIB_TXT=['화면 아래쪽(가까운) 베이스라인의 한쪽 모서리를 누르세요 (1/4)','같은 베이스라인의 반대쪽 모서리 (2/4)','2번에서 사이드라인을 따라간 위쪽(먼) 베이스라인 모서리 (3/4)','남은 마지막 모서리 (4/4)'];
