@@ -148,8 +148,8 @@ input[type=range]{width:100%;accent-color:var(--ball)}
         <button class="recbtn" id="recBtn"><span class="dot"></span><span id="recLbl">녹화 시작</span></button>
       </div>
       <div class="teams">
-        <button class="team" id="tA"><span class="srv" id="sA" hidden>서브</span><span class="nm" id="nA">A팀</span><span class="sc" id="scA">0</span><span class="hint">랠리 승리</span></button>
-        <button class="team" id="tB"><span class="srv" id="sB" hidden>서브</span><span class="nm" id="nB">B팀</span><span class="sc" id="scB">0</span><span class="hint">랠리 승리</span></button>
+        <button class="team" id="tA"><span class="srv" id="sA" hidden>서브</span><span class="nm" id="nA">A팀</span><span class="sc" id="scA">0</span><span class="hint" id="hA">랠리 승리</span></button>
+        <button class="team" id="tB"><span class="srv" id="sB" hidden>서브</span><span class="nm" id="nB">B팀</span><span class="sc" id="scB">0</span><span class="hint" id="hB">랠리 승리</span></button>
       </div>
       <div class="call"><div><div class="lbl">스코어 콜</div><div class="v" id="callV">0-0-2</div></div><div style="text-align:right"><div class="lbl">게임</div><div class="v" id="gameV">1</div></div></div>
       <div class="rowbtns">
@@ -163,7 +163,7 @@ input[type=range]{width:100%;accent-color:var(--ball)}
         <div class="toggle"><span>움직임으로 랠리 감지<small>랠리가 끝나면 득점 팀을 바로 물어봐요</small></span><button class="sw" role="switch" aria-checked="false" id="swMotion"></button></div>
         <div class="meter" aria-hidden="true"><i id="meterI"></i><b id="meterB"></b></div>
         <div class="status" id="motionStatus">꺼짐</div>
-        <div class="toggle"><span>음성으로 점수 입력<small>"<span id="vA">A팀</span>", "서브", "리시브", "무효", "취소"라고 말하기</small></span><button class="sw" role="switch" aria-checked="false" id="swVoice"></button></div>
+        <div class="toggle"><span>음성으로 점수 입력<small>"득점", "사이드아웃", "<span id="vA">A팀</span>", "무효", "취소"라고 말하기</small></span><button class="sw" role="switch" aria-checked="false" id="swVoice"></button></div>
         <div class="status" id="voiceStatus">꺼짐</div>
         <div class="toggle"><span>선수 위치로 서브팀 확인 (복식)<small>서브팀은 둘 다 베이스라인, 리시브팀은 한 명이 키친 앞</small></span><button class="sw" role="switch" aria-checked="false" id="swPos"></button></div>
         <div class="chips"><button class="chip" id="calibBtn">코트 맞추기</button><button class="chip" id="swapSide">코트 교대</button><button class="chip" id="showPos">인식 표시</button></div>
@@ -281,7 +281,12 @@ function paintTeams(){
   $('#nA').textContent=$('#pA').textContent=$('#vA').textContent=cfg.nameA;$('#nB').textContent=$('#pB').textContent=cfg.nameB;
 }
 function fmt(t){t=Math.max(0,Math.floor(t));return `${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}`;}
+function outcome(team){
+  if(cfg.mode==='rally'||team===S.serving)return '득점';
+  return cfg.mode==='doubles'&&S.server===1?'랠리 승 (점수 없음)':'사이드아웃';
+}
 function render(){
+  $('#hA').textContent=outcome(0);$('#hB').textContent=outcome(1);
   $('#scA').textContent=S.score[0];$('#scB').textContent=S.score[1];
   $('#sA').hidden=S.serving!==0;$('#sB').hidden=S.serving!==1;
   const sl=cfg.mode==='doubles'?`서브 ${S.server}`:'서브';$('#sA').textContent=$('#sB').textContent=sl;
@@ -405,10 +410,12 @@ setInterval(()=>{
 },120);
 function onRallyEnd(start,end){
   if(S.over)return;
+  if(!rallyValid){rallyValid=true;return;}
   pending={start,end};beep(660,.12);
   clearInterval(pendingTimer);
   let left=+cfg.wait;const srvName=names()[S.serving];
-  const upd=()=>{$('#promptTxt').textContent=`랠리 종료 — ${left}초 뒤 서브팀(${srvName}) 승으로 처리`;};
+  const upd=()=>{$('#promptTxt').textContent=`랠리 종료 — ${left}초 뒤 ${srvName} 득점으로 처리 · 서브권이 넘어갔으면 "사이드아웃"`;};
+  $('#pA').textContent=`${names()[0]} ${outcome(0)}`;$('#pB').textContent=`${names()[1]} ${outcome(1)}`;
   upd();$('#prompt').hidden=false;
   pendingTimer=setInterval(()=>{left--;if(left<=0){clearInterval(pendingTimer);rallyWon(S.serving,'auto');}else upd();},1000);
 }
@@ -430,8 +437,9 @@ function handleVoice(raw){
   const n=s=>s.replace(/\s/g,'').toLowerCase();
   if(/취소|되돌|잘못/.test(t))return undo();
   if(/무효|노카운트|다시|렛/.test(t)){if(pending){hidePrompt();toast('이번 랠리는 무효 처리했어요');}return;}
-  if(/리시브|받는팀|리턴/.test(t))return rallyWon(1-S.serving,'voice');
-  if(/서브/.test(t))return rallyWon(S.serving,'voice');
+  // 서브권이 넘어가는 말(사이드아웃 등)은 리시브팀 랠리 승 → 점수 없이 서브권만 이동
+  if(/사이드|넘어|넘김|체인지|서브권|교대|실점|폴트|리시브|받는팀|리턴|점수없|노포인트/.test(t))return rallyWon(1-S.serving,'voice');
+  if(/득점|포인트|점수|서브팀|서브성공|플러스/.test(t))return rallyWon(S.serving,'voice');
   const isA=t.includes(n(cfg.nameA))||/a팀|에이|^a$/.test(t), isB=t.includes(n(cfg.nameB))||/b팀|비팀|^비$|^b$/.test(t);
   if(isA&&!isB)rallyWon(0,'voice');else if(isB&&!isA)rallyWon(1,'voice');
 }
@@ -440,7 +448,7 @@ function handleVoice(raw){
 const NEAR=13; // 네트에서 13ft(키친 7ft + 여유) 안쪽이면 '앞'
 const COURT=[[0,0],[20,0],[20,44],[0,44]];
 const dbg=$('#dbg'),dctx=dbg.getContext('2d');
-let posOn=false,posModel=null,posBusy=false,posHist=[],lastDet=null,calibMode=0,calibPts=[],Hc=null,Hinv=null;
+let rallyValid=true,posOn=false,posModel=null,posBusy=false,posHist=[],lastDet=null,calibMode=0,calibPts=[],Hc=null,Hinv=null;
 const halfTeam=h=>S.swap?1-h:h;
 function loadScript(src){return new Promise((res,rej)=>{const el=document.createElement('script');el.src=src;el.onload=res;el.onerror=()=>rej(new Error(src));document.head.appendChild(el);});}
 async function ensureModel(){
@@ -510,9 +518,10 @@ setInterval(async()=>{
 function onRallyStart(){
   // 카운트다운이 끝나기 전에 다음 서브가 시작되면 기본값(서브팀 승)을 먼저 확정
   if(pending&&!$('#prompt').hidden){clearInterval(pendingTimer);rallyWon(S.serving,'auto');}
-  updatePosStatus();
+  updatePosStatus();rallyValid=true;
   if(!posOn||cfg.mode!=='doubles'||S.over)return;
-  const team=guessServe();posHist=[];
+  const team=guessServe();const hadDet=posHist.length>=2&&!!Hc;posHist=[];
+  if(team==null&&hadDet){rallyValid=false;$('#motionStatus').innerHTML='서브 대형이 아니어서 랠리로 보지 않아요 (선수 이동 중)';return;}
   if(team==null||team===S.serving)return;
   const last=S.events[S.events.length-1];
   if(last&&last.src==='auto'&&hist.length){
