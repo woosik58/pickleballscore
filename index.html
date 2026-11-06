@@ -34,7 +34,11 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 #dbg{position:absolute;pointer-events:none;touch-action:none}
 #dbg.calib{pointer-events:auto;cursor:crosshair}
 .calibbar{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);background:rgba(7,26,30,.94);border:2px solid var(--ball);border-radius:14px;padding:10px 14px;display:flex;gap:12px;align-items:center;justify-content:space-between;width:min(92%,480px);font-weight:700;line-height:1.4}
+.calibbar{flex-wrap:wrap}
 .calibbar button{color:var(--muted);text-decoration:underline;flex:none}
+.calibbar .acts{display:flex;gap:8px;flex-wrap:wrap}
+.calibbar .acts button{text-decoration:none;border:1px solid var(--line);border-radius:10px;padding:8px 12px;color:var(--chalk);font-weight:700}
+.calibbar .acts .ok{background:var(--ball);border-color:var(--ball);color:#0b1d10}
 .chips{display:flex;flex-wrap:wrap;gap:8px}.chips .chip{flex:1;min-width:90px}
 .placeholder{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:24px;
   background:repeating-linear-gradient(90deg,transparent 0 48%,rgba(255,255,255,.06) 48% 52%,transparent 52%),var(--court)}
@@ -129,7 +133,7 @@ input[type=range]{width:100%;accent-color:var(--ball)}
     <video id="cam" playsinline muted autoplay></video>
     <canvas id="out" width="1280" height="720"></canvas>
     <canvas id="dbg" hidden></canvas>
-    <div class="calibbar" id="calibBar" hidden><span id="calibTxt"></span><button id="calibX">취소</button></div>
+    <div class="calibbar" id="calibBar" hidden><span id="calibTxt"></span><div class="acts"><button id="calibRedo" hidden>처음부터 다시</button><button id="calibX">취소</button><button class="ok" id="calibOk" hidden>완료</button></div></div>
     <div class="placeholder" id="ph">
       <h1>PICKLE<b>CAM</b></h1>
       <p>휴대폰을 삼각대에 고정하고 코트 전체가 보이게 비춰 주세요. 점수판이 영상에 함께 녹화됩니다.</p>
@@ -175,7 +179,7 @@ input[type=range]{width:100%;accent-color:var(--ball)}
         <div class="toggle"><span>음성으로 점수 입력<small>"득점", "사이드아웃", "<span id="vA">A팀</span>", "무효", "취소"라고 말하기</small></span><button class="sw" role="switch" aria-checked="false" id="swVoice"></button></div>
         <div class="status" id="voiceStatus">꺼짐</div>
         <div class="toggle"><span>선수 위치로 서브팀 확인 (복식)<small>서브팀은 둘 다 베이스라인, 리시브팀은 한 명이 키친 앞</small></span><button class="sw" role="switch" aria-checked="false" id="swPos"></button></div>
-        <div class="chips"><button class="chip" id="calibBtn">코트 맞추기</button><button class="chip" id="showPos">인식 표시</button></div>
+        <div class="chips"><button class="chip" id="calibBtn">코트 맞추기 · 수정</button><button class="chip" id="showPos">인식 표시</button></div>
         <div class="status" id="posStatus">꺼짐</div>
       </div>
 
@@ -671,18 +675,47 @@ function onRallyStart(){
   }
 }
 const CALIB_TXT=['화면 아래쪽(가까운) 베이스라인의 한쪽 모서리를 누르세요 (1/4)','같은 베이스라인의 반대쪽 모서리 (2/4)','2번에서 사이드라인을 따라간 위쪽(먼) 베이스라인 모서리 (3/4)','남은 마지막 모서리 (4/4)'];
+// calibMode 1: 모서리 4개 새로 찍기 · 2: 점을 끌어서 미세 조정
+let dragIdx=-1,calibH=null;
+function calibUI(){
+  const edit=calibMode===2;
+  $('#calibTxt').textContent=edit?'노란 점을 끌어서 코트 모서리에 정확히 맞추세요. 선이 코트 라인과 겹치면 완료':CALIB_TXT[calibPts.length];
+  $('#calibOk').hidden=!edit;$('#calibRedo').hidden=!edit;
+  calibH=calibPts.length===4?solveH(COURT,calibPts.map(([nx,ny])=>[nx*out.width,ny*out.height])):null;
+}
 function startCalib(){
   if(!stream){toast('먼저 카메라를 켜 주세요');return;}
-  calibMode=1;calibPts=[];dbg.classList.add('calib');$('#calibBar').hidden=false;$('#calibTxt').textContent=CALIB_TXT[0];
+  dbg.classList.add('calib');$('#calibBar').hidden=false;
+  if(cfg.calib&&cfg.calib.length===4){calibMode=2;calibPts=cfg.calib.map(p=>[...p]);}
+  else{calibMode=1;calibPts=[];}
+  calibUI();
 }
-function endCalib(){calibMode=0;dbg.classList.remove('calib');$('#calibBar').hidden=true;}
+function redoCalib(){calibMode=1;calibPts=[];calibUI();}
+function endCalib(){calibMode=0;dragIdx=-1;dbg.classList.remove('calib');$('#calibBar').hidden=true;}
+function saveCalib(){
+  cfg.calib=calibPts.map(p=>[...p]);saveCfg();buildH();endCalib();posHist=[];
+  toast(Hc?'코트를 맞췄어요':'모서리를 다시 찍어 주세요');updatePosStatus();
+}
+const ptAt=e=>{const r=dbg.getBoundingClientRect();return [Math.min(1,Math.max(0,(e.clientX-r.left)/r.width)),Math.min(1,Math.max(0,(e.clientY-r.top)/r.height)),r];};
 dbg.addEventListener('pointerdown',e=>{
   if(!calibMode)return;e.preventDefault();
-  const r=dbg.getBoundingClientRect();calibPts.push([(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height]);
-  if(calibPts.length<4){$('#calibTxt').textContent=CALIB_TXT[calibPts.length];return;}
-  cfg.calib=calibPts;saveCfg();buildH();endCalib();posHist=[];
-  toast(Hc?'코트를 맞췄어요':'모서리를 다시 찍어 주세요');updatePosStatus();
+  const[nx,ny,r]=ptAt(e);
+  if(calibMode===1){
+    calibPts.push([nx,ny]);
+    if(calibPts.length===4)calibMode=2;
+    calibUI();return;
+  }
+  // 가장 가까운 점 잡기 (화면에서 40px 안)
+  let best=-1,bd=1e9;
+  calibPts.forEach(([px,py],i)=>{const d=Math.hypot((px-nx)*r.width,(py-ny)*r.height);if(d<bd){bd=d;best=i;}});
+  if(bd<40){dragIdx=best;dbg.setPointerCapture(e.pointerId);}
 });
+dbg.addEventListener('pointermove',e=>{
+  if(calibMode!==2||dragIdx<0)return;e.preventDefault();
+  const[nx,ny]=ptAt(e);calibPts[dragIdx]=[nx,ny];calibUI();
+});
+const endDrag=()=>{dragIdx=-1;};
+dbg.addEventListener('pointerup',endDrag);dbg.addEventListener('pointercancel',endDrag);
 function drawDbg(){
   const show=!!calibMode||(posOn&&cfg.showPos);
   dbg.hidden=!show;if(!show)return;
@@ -691,9 +724,17 @@ function drawDbg(){
   if(dbg.width!==out.width||dbg.height!==out.height){dbg.width=out.width;dbg.height=out.height;}
   const c=dctx,W=dbg.width,H=dbg.height,u=Math.min(W,H)/720;c.clearRect(0,0,W,H);
   if(calibMode){
-    c.fillStyle='rgba(0,0,0,.25)';c.fillRect(0,0,W,H);
-    calibPts.forEach(([nx,ny],i)=>{c.fillStyle='#d7f23a';c.beginPath();c.arc(nx*W,ny*H,10*u,0,7);c.fill();
-      c.fillStyle='#0b1d10';c.font=`800 ${14*u}px sans-serif`;c.textAlign='center';c.textBaseline='middle';c.fillText(i+1,nx*W,ny*H);});
+    c.fillStyle=calibMode===2?'rgba(0,0,0,.12)':'rgba(0,0,0,.25)';c.fillRect(0,0,W,H);
+    if(calibMode===2&&calibH){
+      const L=(a,b,col,w)=>{const[x1,y1]=applyH(calibH,...a),[x2,y2]=applyH(calibH,...b);c.strokeStyle=col;c.lineWidth=w*u;c.beginPath();c.moveTo(x1,y1);c.lineTo(x2,y2);c.stroke();};
+      [[[0,0],[20,0]],[[20,0],[20,44]],[[20,44],[0,44]],[[0,44],[0,0]],[[10,0],[10,15]],[[10,29],[10,44]]].forEach(([a,b])=>L(a,b,'rgba(215,242,58,.9)',2.5));
+      L([0,15],[20,15],'rgba(255,77,77,.95)',2.5);L([0,29],[20,29],'rgba(255,77,77,.95)',2.5);L([0,22],[20,22],'#ffffff',3);
+    }
+    calibPts.forEach(([nx,ny],i)=>{const big=i===dragIdx;
+      c.strokeStyle='#0b1d10';c.lineWidth=3*u;c.fillStyle='#d7f23a';c.beginPath();c.arc(nx*W,ny*H,(big?16:12)*u,0,7);c.fill();c.stroke();
+      c.strokeStyle='#ff4d4d';c.lineWidth=2*u;c.beginPath();c.moveTo(nx*W-6*u,ny*H);c.lineTo(nx*W+6*u,ny*H);c.moveTo(nx*W,ny*H-6*u);c.lineTo(nx*W,ny*H+6*u);c.stroke();
+      c.fillStyle='#fff';c.font=`800 ${15*u}px sans-serif`;c.textAlign='center';c.textBaseline='middle';c.lineWidth=4*u;c.strokeStyle='rgba(0,0,0,.7)';
+      c.strokeText(i+1,nx*W,ny*H-24*u);c.fillText(i+1,nx*W,ny*H-24*u);});
     return;
   }
   if(Hinv){
@@ -864,7 +905,7 @@ $('#swPos').onclick=async()=>{
   try{await ensureModel();updatePosStatus();if(!cfg.calib)startCalib();}
   catch(e){posOn=false;setSw('#swPos',false);$('#posStatus').textContent='인식 모델을 불러오지 못했어요. 인터넷 연결을 확인해 주세요';}
 };
-$('#calibBtn').onclick=startCalib;$('#calibX').onclick=endCalib;
+$('#calibBtn').onclick=startCalib;$('#calibX').onclick=endCalib;$('#calibOk').onclick=saveCalib;$('#calibRedo').onclick=redoCalib;
 $('#swapSide').onclick=()=>{snapshot();S.swap=!S.swap;save();posHist=[];render();updatePosStatus();banner={txt:'코트 체인지',until:performance.now()+2000};toast(`아래쪽: ${names()[halfTeam(0)]} · 위쪽: ${names()[halfTeam(1)]}`);};
 $('#swAutoSide').onclick=()=>{cfg.autoSide=!cfg.autoSide;setSw('#swAutoSide',cfg.autoSide);saveCfg();};setSw('#swAutoSide',cfg.autoSide);
 $('#showPos').onclick=()=>{cfg.showPos=!cfg.showPos;saveCfg();$('#showPos').classList.toggle('on',!!cfg.showPos);};
