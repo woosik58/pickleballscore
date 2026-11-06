@@ -194,6 +194,7 @@ input[type=range]{width:100%;accent-color:var(--ball)}
         <div class="grid2">
           <label class="f">카메라<select id="facing"><option value="environment">후면</option><option value="user">전면 / 노트북</option></select></label>
           <label class="f">화질<select id="res"><option value="720">720p</option><option value="1080">1080p</option></select></label>
+          <label class="f" style="grid-column:1/-1">화면 방향<select id="rotate"><option value="auto">자동 (폰 기울기 감지)</option><option value="0">회전 안 함</option><option value="270">왼쪽으로 90° 돌리기</option><option value="90">오른쪽으로 90° 돌리기</option><option value="180">180° 뒤집기</option></select></label>
         </div>
         <div class="toggle"><span>소리 함께 녹음</span><button class="sw" role="switch" aria-checked="true" id="swMic"></button></div>
         <button class="chip" id="restartCam">카메라 다시 연결</button>
@@ -232,7 +233,7 @@ const cam=$('#cam'), out=$('#out'), octx=out.getContext('2d');
 const LS={get(k,d){try{const v=localStorage.getItem('pbcam.'+k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem('pbcam.'+k,JSON.stringify(v))}catch(e){}}};
 
 /* ---------- 설정 ---------- */
-const cfg=Object.assign({nameA:'A팀',nameB:'B팀',colA:'#3aa8ff',colB:'#ff8a3a',mode:'doubles',target:11,facing:'environment',res:'720',mic:true,sens:6,quiet:2.5,wait:5,pre:10,post:2,all:false},LS.get('cfg',{}));
+const cfg=Object.assign({nameA:'A팀',nameB:'B팀',colA:'#3aa8ff',colB:'#ff8a3a',mode:'doubles',target:11,facing:'environment',res:'720',rotate:'auto',mic:true,sens:6,quiet:2.5,wait:5,pre:10,post:2,all:false},LS.get('cfg',{}));
 function saveCfg(){LS.set('cfg',cfg);paintTeams();}
 
 /* ---------- 경기 상태 ---------- */
@@ -300,6 +301,7 @@ const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',
 /* ---------- 카메라 ---------- */
 let stream=null;
 async function startCam(){
+  try{if(window.DeviceMotionEvent&&DeviceMotionEvent.requestPermission)DeviceMotionEvent.requestPermission().catch(()=>{});}catch(e){}
   try{
     if(stream)stream.getTracks().forEach(t=>t.stop());
     const h=cfg.res==='1080'?1080:720,w=h===1080?1920:1280;
@@ -307,7 +309,7 @@ async function startCam(){
     cam.srcObject=stream;await cam.play();
     $('#ph').hidden=true;
     await document.fonts.ready;
-    const sz=()=>{if(cam.videoWidth){out.width=cam.videoWidth;out.height=cam.videoHeight;buildH();}};sz();cam.onresize=sz;
+    const sz=()=>{rot=wantRot();sizeOut();};sz();cam.onresize=()=>{if(!recording)sz();};
     try{await navigator.wakeLock?.request('screen');}catch(e){}
   }catch(e){toast('카메라를 켤 수 없어요. 브라우저의 카메라 권한을 허용해 주세요');console.error(e);}
 }
@@ -351,8 +353,34 @@ function drawOverlay(c,W,H){
   }
   c.restore();
 }
+/* 가로로 들고 찍는데 화면 자동회전이 꺼져 있으면 카메라가 세로 프레임을 줌 → 기울기를 보고 영상을 돌려 맞춤 */
+const IOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+let gx=0,gy=9.8,rot=0;
+window.addEventListener('devicemotion',e=>{const g=e.accelerationIncludingGravity;if(g&&g.x!=null){gx=gx*0.85+g.x*0.15;gy=gy*0.85+g.y*0.15;}});
+function wantRot(){
+  if(cfg.rotate!=='auto')return +cfg.rotate;
+  const vw=cam.videoWidth,vh=cam.videoHeight;if(!vw||vw>=vh)return 0;
+  const sgn=(IOS?-1:1)*(cfg.facing==='user'?-1:1),x=gx*sgn;
+  if(Math.abs(gy)>Math.abs(x)+2)return 0;
+  if(x>5)return 270;if(x<-5)return 90;return rot;
+}
+function sizeOut(){
+  const vw=cam.videoWidth,vh=cam.videoHeight;if(!vw)return;
+  const side=rot%180!==0;const W=side?vh:vw,H=side?vw:vh;
+  if(out.width!==W||out.height!==H){out.width=W;out.height=H;}
+  buildH();
+}
+let rotCheck=0;
 function loop(){
-  if(cam.readyState>=2){octx.drawImage(cam,0,0,out.width,out.height);drawOverlay(octx,out.width,out.height);}
+  if(cam.readyState>=2){
+    if(!recording&&performance.now()-rotCheck>300){rotCheck=performance.now();const r=wantRot();if(r!==rot){rot=r;sizeOut();}}
+    const W=out.width,H=out.height;octx.save();
+    if(rot===90){octx.translate(W,0);octx.rotate(Math.PI/2);octx.drawImage(cam,0,0,H,W);}
+    else if(rot===270){octx.translate(0,H);octx.rotate(-Math.PI/2);octx.drawImage(cam,0,0,H,W);}
+    else if(rot===180){octx.translate(W,H);octx.rotate(Math.PI);octx.drawImage(cam,0,0,W,H);}
+    else octx.drawImage(cam,0,0,W,H);
+    octx.restore();drawOverlay(octx,W,H);
+  }
   drawDbg();
   requestAnimationFrame(loop);
 }
@@ -508,7 +536,7 @@ setInterval(async()=>{
   if(!posOn||!posModel||posBusy||cam.readyState<2||!Hc||inRally)return;
   posBusy=true;
   try{
-    const r=await posModel.detect(cam,12,0.35);
+    const r=await posModel.detect(out,12,0.35);
     const c=classify(r.filter(o=>o.class==='person'));const now=performance.now();
     lastDet={...c,t:now};posHist.push({t:now,srv:c.srv});posHist=posHist.filter(h=>now-h.t<3000);
     updatePosStatus();
@@ -734,7 +762,8 @@ $('#showPos').onclick=()=>{cfg.showPos=!cfg.showPos;saveCfg();$('#showPos').clas
 $('#showPos').classList.toggle('on',!!cfg.showPos);
 const bind=(id,key,fn=v=>v)=>{const el=$(id);el.value=cfg[key];el.addEventListener('input',()=>{cfg[key]=fn(el.value);saveCfg();render();});};
 bind('#iA','nameA');bind('#iB','nameB');bind('#cA','colA');bind('#cB','colB');
-bind('#mode','mode');bind('#target','target',Number);bind('#facing','facing');bind('#res','res');
+bind('#mode','mode');bind('#target','target',Number);bind('#facing','facing');bind('#res','res');bind('#rotate','rotate');
+$('#rotate').addEventListener('change',()=>{if(recording){toast('녹화를 멈춘 뒤에 방향이 바뀌어요');return;}rot=wantRot();sizeOut();});
 bind('#pre','pre',Number);bind('#post','post',Number);
 bind('#sens','sens',Number);bind('#quiet','quiet',Number);bind('#wait','wait',Number);
 $('#wait').addEventListener('input',()=>$('#waitV').textContent=cfg.wait+'초');$('#waitV').textContent=cfg.wait+'초';
