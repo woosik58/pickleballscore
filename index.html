@@ -63,7 +63,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .recbtn.on{background:var(--rec);border-color:var(--rec)}
 .recbtn.on .dot{background:#fff;border-radius:3px}
 .teams{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.team{border-radius:16px;padding:12px 10px 14px;color:#fff;display:flex;flex-direction:column;align-items:center;gap:2px;position:relative;min-height:132px;justify-content:center;transition:transform .08s}
+.team{border-radius:16px;padding:34px 10px 14px;color:#fff;display:flex;flex-direction:column;align-items:center;gap:2px;position:relative;min-height:132px;justify-content:center;transition:transform .08s}
 .team:active{transform:scale(.97)}
 .team .nm{font-weight:900;font-size:15px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .team .sc{font-family:var(--f-num);font-size:64px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
@@ -73,6 +73,11 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .call .lbl{font-size:12px;color:var(--muted)}
 .call .v{font-family:var(--f-num);font-size:34px;font-weight:800;letter-spacing:.05em;font-variant-numeric:tabular-nums}
 .rowbtns{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.rowbtns.four{grid-template-columns:repeat(2,1fr)}
+.team .side{position:absolute;top:8px;left:10px;font-size:11px;font-weight:900;background:rgba(0,0,0,.28);padding:2px 8px;border-radius:999px}
+.team .pl{font-size:12px;opacity:.9;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-height:1em}
+.players{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding-left:52px}
+.players input{background:#06171a;border:1px solid var(--line);border-radius:10px;padding:9px 10px;color:var(--chalk);font-size:14px;font-family:inherit;min-width:0;width:100%}
 .chip{background:var(--court-2);border:1px solid var(--line);border-radius:12px;padding:10px 6px;font-weight:700;font-size:13px}
 .chip.on{border-color:var(--ball);color:var(--ball)}
 .box{background:var(--court-2);border:1px solid var(--line);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:10px}
@@ -148,13 +153,14 @@ input[type=range]{width:100%;accent-color:var(--ball)}
         <button class="recbtn" id="recBtn"><span class="dot"></span><span id="recLbl">녹화 시작</span></button>
       </div>
       <div class="teams">
-        <button class="team" id="tA"><span class="srv" id="sA" hidden>서브</span><span class="nm" id="nA">A팀</span><span class="sc" id="scA">0</span><span class="hint" id="hA">랠리 승리</span></button>
-        <button class="team" id="tB"><span class="srv" id="sB" hidden>서브</span><span class="nm" id="nB">B팀</span><span class="sc" id="scB">0</span><span class="hint" id="hB">랠리 승리</span></button>
+        <button class="team" id="tA"><span class="side" id="sideA">▼ 아래</span><span class="srv" id="sA" hidden>서브</span><span class="nm" id="nA">A팀</span><span class="pl" id="plA"></span><span class="sc" id="scA">0</span><span class="hint" id="hA">랠리 승리</span></button>
+        <button class="team" id="tB"><span class="side" id="sideB">▲ 위</span><span class="srv" id="sB" hidden>서브</span><span class="nm" id="nB">B팀</span><span class="pl" id="plB"></span><span class="sc" id="scB">0</span><span class="hint" id="hB">랠리 승리</span></button>
       </div>
       <div class="call"><div><div class="lbl">스코어 콜</div><div class="v" id="callV">0-0-2</div></div><div style="text-align:right"><div class="lbl">게임</div><div class="v" id="gameV">1</div></div></div>
-      <div class="rowbtns">
+      <div class="rowbtns four">
         <button class="chip" id="undo">되돌리기</button>
         <button class="chip" id="swapSrv">서브 팀 변경</button>
+        <button class="chip" id="swapSide">코트 체인지 (위↔아래)</button>
         <button class="chip" id="newGame">다음 게임</button>
       </div>
 
@@ -166,7 +172,7 @@ input[type=range]{width:100%;accent-color:var(--ball)}
         <div class="toggle"><span>음성으로 점수 입력<small>"득점", "사이드아웃", "<span id="vA">A팀</span>", "무효", "취소"라고 말하기</small></span><button class="sw" role="switch" aria-checked="false" id="swVoice"></button></div>
         <div class="status" id="voiceStatus">꺼짐</div>
         <div class="toggle"><span>선수 위치로 서브팀 확인 (복식)<small>서브팀은 둘 다 베이스라인, 리시브팀은 한 명이 키친 앞</small></span><button class="sw" role="switch" aria-checked="false" id="swPos"></button></div>
-        <div class="chips"><button class="chip" id="calibBtn">코트 맞추기</button><button class="chip" id="swapSide">코트 교대</button><button class="chip" id="showPos">인식 표시</button></div>
+        <div class="chips"><button class="chip" id="calibBtn">코트 맞추기</button><button class="chip" id="showPos">인식 표시</button></div>
         <div class="status" id="posStatus">꺼짐</div>
       </div>
 
@@ -180,14 +186,19 @@ input[type=range]{width:100%;accent-color:var(--ball)}
       <div class="box">
         <h3>팀</h3>
         <div class="colorrow"><input type="color" id="cA" value="#3aa8ff" aria-label="A팀 색"><label class="f" style="flex:1"><input type="text" id="iA" value="A팀" aria-label="A팀 이름"></label></div>
+        <div class="players"><input type="text" id="plA1" placeholder="A팀 선수 1" aria-label="A팀 선수 1"><input type="text" id="plA2" placeholder="A팀 선수 2" aria-label="A팀 선수 2"></div>
         <div class="colorrow"><input type="color" id="cB" value="#ff8a3a" aria-label="B팀 색"><label class="f" style="flex:1"><input type="text" id="iB" value="B팀" aria-label="B팀 이름"></label></div>
+        <div class="players"><input type="text" id="plB1" placeholder="B팀 선수 1" aria-label="B팀 선수 1"><input type="text" id="plB2" placeholder="B팀 선수 2" aria-label="B팀 선수 2"></div>
+        <p class="note">처음에는 화면 아래쪽 코트가 A팀, 위쪽 코트가 B팀이에요.</p>
       </div>
       <div class="box">
         <h3>경기 방식</h3>
         <div class="grid2">
           <label class="f">점수 방식<select id="mode"><option value="doubles">복식 (사이드아웃)</option><option value="singles">단식 (사이드아웃)</option><option value="rally">랠리 스코어</option></select></label>
           <label class="f">목표 점수<select id="target"><option>11</option><option>15</option><option>21</option></select></label>
+          <label class="f">게임 수<select id="games"><option value="1">1게임 단판</option><option value="3">3게임 (2선승)</option></select></label>
         </div>
+        <div class="toggle"><span>자동 코트 체인지<small>게임이 끝날 때마다, 마지막 게임은 6점(15점제 8점·21점제 11점)에서 위·아래를 바꿔요</small></span><button class="sw" role="switch" aria-checked="true" id="swAutoSide"></button></div>
       </div>
       <div class="box">
         <h3>카메라 · 녹화</h3>
@@ -233,14 +244,15 @@ const cam=$('#cam'), out=$('#out'), octx=out.getContext('2d');
 const LS={get(k,d){try{const v=localStorage.getItem('pbcam.'+k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem('pbcam.'+k,JSON.stringify(v))}catch(e){}}};
 
 /* ---------- 설정 ---------- */
-const cfg=Object.assign({nameA:'A팀',nameB:'B팀',colA:'#3aa8ff',colB:'#ff8a3a',mode:'doubles',target:11,facing:'environment',res:'720',rotate:'auto',mic:true,sens:6,quiet:2.5,wait:5,pre:10,post:2,all:false},LS.get('cfg',{}));
+const cfg=Object.assign({nameA:'A팀',nameB:'B팀',colA:'#3aa8ff',colB:'#ff8a3a',mode:'doubles',target:11,facing:'environment',res:'720',rotate:'auto',plA1:'',plA2:'',plB1:'',plB2:'',games:'1',autoSide:true,mic:true,sens:6,quiet:2.5,wait:5,pre:10,post:2,all:false},LS.get('cfg',{}));
 function saveCfg(){LS.set('cfg',cfg);paintTeams();}
 
 /* ---------- 경기 상태 ---------- */
-const fresh=()=>({score:[0,0],serving:0,server:2,gameWins:[0,0],games:[],game:1,over:false,firstServer:0,events:[],swap:false});
+const fresh=()=>({score:[0,0],serving:0,server:2,gameWins:[0,0],games:[],game:1,over:false,firstServer:0,events:[],swap:false,midSwitched:false});
 let S=Object.assign(fresh(),LS.get('match',{}));
 let hist=[];
 const names=()=>[cfg.nameA,cfg.nameB], cols=()=>[cfg.colA,cfg.colB];
+const players=i=>(i===0?[cfg.plA1,cfg.plA2]:[cfg.plB1,cfg.plB2]).map(v=>(v||'').trim()).filter(Boolean);
 function snapshot(){hist.push(JSON.stringify(S));if(hist.length>200)hist.shift();}
 function callStr(){const s=S.serving,r=1-s;return cfg.mode==='doubles'?`${S.score[s]}-${S.score[r]}-${S.server}`:`${S.score[s]}-${S.score[r]}`;}
 function gamePoint(){const t=cfg.target;const can=w=>S.score[w]>=t-1&&S.score[w]-S.score[1-w]>=1;return cfg.mode==='rally'?(can(0)||can(1)):can(S.serving);}
@@ -261,6 +273,11 @@ function rallyWon(w,source,keep){
   S.events.push(ev);
   if(scored){flash={team:w,until:performance.now()+1200};}
   else banner={txt:cfg.mode==='doubles'&&S.server===2?'2번 서버':'사이드 아웃',until:performance.now()+1500};
+  const deciding=cfg.games==='1'||S.game===Number(cfg.games);
+  if(scored&&cfg.autoSide&&deciding&&!S.midSwitched&&S.score[w]===Math.ceil(cfg.target/2)&&S.score[1-w]<S.score[w]){
+    S.midSwitched=true;S.swap=!S.swap;posHist=[];
+    setTimeout(()=>{banner={txt:'코트 체인지!',until:performance.now()+3500};beep(740,.2);toast(`코트 체인지: 이제 아래쪽은 ${names()[halfTeam(0)]}`);},1300);
+  }
   if(scored&&S.score[w]>=cfg.target&&S.score[w]-S.score[1-w]>=2){
     S.over=true;S.gameWins[w]++;banner={txt:`GAME · ${names()[w]} 승`,until:performance.now()+4000};beep(880,.25);
   }
@@ -269,7 +286,7 @@ function rallyWon(w,source,keep){
 function undo(){if(!hist.length){toast('되돌릴 기록이 없어요');return;}S=JSON.parse(hist.pop());save();render();toast('되돌렸어요');}
 function newGame(){
   snapshot();S.games.push([...S.score]);S.game++;S.score=[0,0];S.over=false;
-  S.firstServer=1-S.firstServer;S.serving=S.firstServer;S.swap=!S.swap;S.server=cfg.mode==='doubles'?2:1;
+  S.firstServer=1-S.firstServer;S.serving=S.firstServer;if(cfg.autoSide){S.swap=!S.swap;posHist=[];}S.midSwitched=false;S.server=cfg.mode==='doubles'?2:1;
   save();render();toast(`게임 ${S.game} 시작`);
 }
 function save(){LS.set('match',S);}
@@ -287,6 +304,9 @@ function outcome(team){
   return cfg.mode==='doubles'&&S.server===1?'랠리 승 (점수 없음)':'사이드아웃';
 }
 function render(){
+  const hs=S.swap?1:0; // 아래쪽 팀 index
+  $('#sideA').textContent=hs===0?'▼ 아래':'▲ 위';$('#sideB').textContent=hs===1?'▼ 아래':'▲ 위';
+  $('#plA').textContent=players(0).join(' · ');$('#plB').textContent=players(1).join(' · ');
   $('#hA').textContent=outcome(0);$('#hB').textContent=outcome(1);
   $('#scA').textContent=S.score[0];$('#scB').textContent=S.score[1];
   $('#sA').hidden=S.serving!==0;$('#sB').hidden=S.serving!==1;
@@ -318,23 +338,26 @@ async function startCam(){
 function rr(c,x,y,w,h,r){c.beginPath();c.roundRect?c.roundRect(x,y,w,h,r):c.rect(x,y,w,h);}
 function drawOverlay(c,W,H){
   const u=Math.min(W,H)/720, now=performance.now();
-  const rowH=54*u, boxW=400*u, x=24*u, y=H-24*u-rowH*2-26*u;
+  const hasPl=players(0).length||players(1).length;const rowH=(hasPl?66:54)*u, boxW=430*u, x=24*u, y=H-24*u-rowH*2-26*u;
   c.save();
   c.fillStyle='rgba(6,20,24,.86)';rr(c,x,y,boxW,26*u+rowH*2,12*u);c.fill();
   c.fillStyle='#d7f23a';c.font=`700 ${15*u}px ${'"Barlow Condensed",sans-serif'}`;c.textBaseline='middle';
   const modeTxt=cfg.mode==='doubles'?'DOUBLES':cfg.mode==='singles'?'SINGLES':'RALLY';
   c.fillText(`PICKLEBALL · ${modeTxt} · GAME ${S.game}`,x+14*u,y+14*u);
   if(gamePoint()&&!S.over){c.fillStyle='#ff4d4d';c.textAlign='right';c.fillText('GAME POINT',x+boxW-14*u,y+14*u);c.textAlign='left';}
-  for(let i=0;i<2;i++){
-    const ry=y+26*u+i*rowH;
+  const order=[S.swap?0:1,S.swap?1:0]; // 윗줄 = 위쪽 코트 팀
+  for(let k=0;k<2;k++){
+    const i=order[k],ry=y+26*u+k*rowH,pl=players(i).join(' · '),ny=pl?ry+rowH/2-9*u:ry+rowH/2;
     c.fillStyle=cols()[i];c.fillRect(x+10*u,ry+8*u,8*u,rowH-16*u);
     c.fillStyle='#eaf4f2';c.font=`700 ${24*u}px "Noto Sans KR",sans-serif`;
     let nm=names()[i];while(c.measureText(nm).width>190*u&&nm.length>1)nm=nm.slice(0,-1);
-    c.fillText(nm,x+30*u,ry+rowH/2);
+    c.fillText(nm,x+30*u,ny);
+    const nmW=c.measureText(nm).width;
+    if(pl){c.fillStyle='rgba(234,244,242,.72)';c.font=`500 ${15*u}px "Noto Sans KR",sans-serif`;let t=pl;while(c.measureText(t).width>240*u&&t.length>1)t=t.slice(0,-1);c.fillText(t,x+30*u,ry+rowH/2+15*u);}
     if(S.serving===i&&!S.over){
-      const bx=x+30*u+c.measureText(nm).width+18*u;
-      c.fillStyle='#d7f23a';c.beginPath();c.arc(bx,ry+rowH/2,8*u,0,7);c.fill();
-      if(cfg.mode==='doubles'){c.font=`800 ${18*u}px "Barlow Condensed",sans-serif`;c.fillText(S.server,bx+13*u,ry+rowH/2+1*u);}
+      const bx=x+30*u+nmW+18*u;
+      c.fillStyle='#d7f23a';c.beginPath();c.arc(bx,ny,8*u,0,7);c.fill();
+      if(cfg.mode==='doubles'){c.font=`800 ${18*u}px "Barlow Condensed",sans-serif`;c.fillText(S.server,bx+13*u,ny+1*u);}
     }
     for(let g=0;g<S.gameWins[i];g++){c.fillStyle='#d7f23a';c.fillRect(x+boxW-118*u-g*14*u,ry+rowH/2-5*u,9*u,10*u);}
     const fl=flash.team===i&&now<flash.until;
@@ -411,7 +434,7 @@ async function finishRec(){
   const evs=S.events.slice(recEventsFrom).filter(e=>e.t!=null);
   const dur=recTime();
   const item={id:Date.now(),kind:'full',created:Date.now(),mime,blob,events:evs,duration:dur,
-    title:`${cfg.nameA} vs ${cfg.nameB}`,teams:[cfg.nameA,cfg.nameB],colors:[cfg.colA,cfg.colB],
+    title:`${cfg.nameA} vs ${cfg.nameB}`,teams:[cfg.nameA,cfg.nameB],players:[players(0),players(1)],colors:[cfg.colA,cfg.colB],
     result:`게임 ${S.gameWins[0]}:${S.gameWins[1]} · 현재 ${S.score[0]}:${S.score[1]}`,games:[...S.games,[...S.score]]};
   try{await dbPut(item);toast('영상을 보관함에 저장했어요');}catch(e){toast('기기 저장 공간이 부족해요. 바로 다운로드할게요');download(item);}
   renderLib();
@@ -465,11 +488,14 @@ function handleVoice(raw){
   const n=s=>s.replace(/\s/g,'').toLowerCase();
   if(/취소|되돌|잘못/.test(t))return undo();
   if(/무효|노카운트|다시|렛/.test(t)){if(pending){hidePrompt();toast('이번 랠리는 무효 처리했어요');}return;}
-  // 서브권이 넘어가는 말(사이드아웃 등)은 리시브팀 랠리 승 → 점수 없이 서브권만 이동
+  // 1) 팀 이름·선수 이름이 하나만 들리면 그 팀이 랠리 승 (서브팀이면 득점, 리시브팀이면 사이드아웃)
+  const plHit=i=>players(i).some(v=>t.includes(n(v)));
+  const isA=plHit(0)||t.includes(n(cfg.nameA))||/a팀|에이|^a$/.test(t), isB=plHit(1)||t.includes(n(cfg.nameB))||/b팀|비팀|^비$|^b$/.test(t);
+  if(isA!==isB)return rallyWon(isA?0:1,'voice');
+  // 2) 서브권이 넘어가는 말 → 점수 없이 서브권만 이동
   if(/사이드|넘어|넘김|체인지|서브권|교대|실점|폴트|리시브|받는팀|리턴|점수없|노포인트/.test(t))return rallyWon(1-S.serving,'voice');
+  // 3) 득점하는 말 → 서브팀 득점
   if(/득점|포인트|점수|서브팀|서브성공|플러스/.test(t))return rallyWon(S.serving,'voice');
-  const isA=t.includes(n(cfg.nameA))||/a팀|에이|^a$/.test(t), isB=t.includes(n(cfg.nameB))||/b팀|비팀|^비$|^b$/.test(t);
-  if(isA&&!isB)rallyWon(0,'voice');else if(isB&&!isA)rallyWon(1,'voice');
 }
 
 /* ---------- 선수 위치로 서브팀 인식 ---------- */
@@ -563,7 +589,7 @@ function onRallyStart(){
     toast(`선수 위치로는 ${names()[team]} 서브예요. 맞으면 "서브 팀 변경"을 눌러 주세요`);
   }
 }
-const CALIB_TXT=['A팀 쪽 베이스라인의 한쪽 모서리를 누르세요 (1/4)','같은 베이스라인의 반대쪽 모서리 (2/4)','2번에서 사이드라인을 따라간 B팀 쪽 모서리 (3/4)','남은 마지막 모서리 (4/4)'];
+const CALIB_TXT=['화면 아래쪽(가까운) 베이스라인의 한쪽 모서리를 누르세요 (1/4)','같은 베이스라인의 반대쪽 모서리 (2/4)','2번에서 사이드라인을 따라간 위쪽(먼) 베이스라인 모서리 (3/4)','남은 마지막 모서리 (4/4)'];
 function startCalib(){
   if(!stream){toast('먼저 카메라를 켜 주세요');return;}
   calibMode=1;calibPts=[];dbg.classList.add('calib');$('#calibBar').hidden=false;$('#calibTxt').textContent=CALIB_TXT[0];
@@ -573,7 +599,7 @@ dbg.addEventListener('pointerdown',e=>{
   if(!calibMode)return;e.preventDefault();
   const r=dbg.getBoundingClientRect();calibPts.push([(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height]);
   if(calibPts.length<4){$('#calibTxt').textContent=CALIB_TXT[calibPts.length];return;}
-  cfg.calib=calibPts;S.swap=false;save();saveCfg();buildH();endCalib();posHist=[];
+  cfg.calib=calibPts;saveCfg();buildH();endCalib();posHist=[];
   toast(Hc?'코트를 맞췄어요':'모서리를 다시 찍어 주세요');updatePosStatus();
 });
 function drawDbg(){
@@ -660,7 +686,8 @@ function openYT(it){
   const title=`[피클볼${it.kind==='hl'?' 하이라이트':''}] ${it.teams[0]} vs ${it.teams[1]} | ${d}`;
   const games=(it.games||[]).map((g,i)=>`게임 ${i+1}: ${it.teams[0]} ${g[0]} - ${g[1]} ${it.teams[1]}`).join('\n');
   const ch=chapters(it);
-  const desc=`${it.teams[0]} vs ${it.teams[1]} 피클볼 경기${it.kind==='hl'?' 득점 하이라이트':''}입니다.\n\n${games}\n${ch?`\n⏱ 구간\n${ch}\n`:''}\n#피클볼 #pickleball #피클볼경기`;
+  const plTxt=(it.players||[]).some(p=>p.length)?`\n${it.teams[0]}: ${(it.players[0]||[]).join(', ')}\n${it.teams[1]}: ${(it.players[1]||[]).join(', ')}\n`:'';
+  const desc=`${it.teams[0]} vs ${it.teams[1]} 피클볼 경기${it.kind==='hl'?' 득점 하이라이트':''}입니다.\n${plTxt}\n${games}\n${ch?`\n⏱ 구간\n${ch}\n`:''}\n#피클볼 #pickleball #피클볼경기`;
   modal(`<strong>유튜브 업로드</strong>
   <p class="note">① 영상을 다운로드하거나 [공유]로 유튜브 앱에 바로 보내세요. ② 아래 제목·설명을 복사해 붙여 넣으면 득점 구간(챕터)이 자동으로 생겨요.</p>
   <label class="f">제목<input type="text" id="ytT" value="${esc(title)}"></label>
@@ -757,11 +784,12 @@ $('#swPos').onclick=async()=>{
   catch(e){posOn=false;setSw('#swPos',false);$('#posStatus').textContent='인식 모델을 불러오지 못했어요. 인터넷 연결을 확인해 주세요';}
 };
 $('#calibBtn').onclick=startCalib;$('#calibX').onclick=endCalib;
-$('#swapSide').onclick=()=>{snapshot();S.swap=!S.swap;save();posHist=[];updatePosStatus();toast(`${names()[halfTeam(0)]}이(가) 1·2번 모서리 쪽으로 바뀌었어요`);};
+$('#swapSide').onclick=()=>{snapshot();S.swap=!S.swap;save();posHist=[];render();updatePosStatus();banner={txt:'코트 체인지',until:performance.now()+2000};toast(`아래쪽: ${names()[halfTeam(0)]} · 위쪽: ${names()[halfTeam(1)]}`);};
+$('#swAutoSide').onclick=()=>{cfg.autoSide=!cfg.autoSide;setSw('#swAutoSide',cfg.autoSide);saveCfg();};setSw('#swAutoSide',cfg.autoSide);
 $('#showPos').onclick=()=>{cfg.showPos=!cfg.showPos;saveCfg();$('#showPos').classList.toggle('on',!!cfg.showPos);};
 $('#showPos').classList.toggle('on',!!cfg.showPos);
 const bind=(id,key,fn=v=>v)=>{const el=$(id);el.value=cfg[key];el.addEventListener('input',()=>{cfg[key]=fn(el.value);saveCfg();render();});};
-bind('#iA','nameA');bind('#iB','nameB');bind('#cA','colA');bind('#cB','colB');
+bind('#iA','nameA');bind('#iB','nameB');bind('#plA1','plA1');bind('#plA2','plA2');bind('#plB1','plB1');bind('#plB2','plB2');bind('#games','games');bind('#cA','colA');bind('#cB','colB');
 bind('#mode','mode');bind('#target','target',Number);bind('#facing','facing');bind('#res','res');bind('#rotate','rotate');
 $('#rotate').addEventListener('change',()=>{if(recording){toast('녹화를 멈춘 뒤에 방향이 바뀌어요');return;}rot=wantRot();sizeOut();});
 bind('#pre','pre',Number);bind('#post','post',Number);
