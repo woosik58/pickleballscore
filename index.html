@@ -43,6 +43,8 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .placeholder p{margin:0;color:var(--muted);max-width:36ch;line-height:1.6}
 .btn-main{background:var(--ball);color:#0b1d10;font-weight:900;padding:14px 26px;border-radius:999px;font-size:16px}
 .rec-badge{position:absolute;top:12px;left:12px;background:rgba(0,0,0,.6);padding:6px 12px;border-radius:999px;font-family:var(--f-num);font-size:20px;letter-spacing:.06em;display:flex;align-items:center;gap:8px}
+.voice-badge{position:absolute;top:12px;right:12px;background:rgba(0,0,0,.65);padding:6px 12px;border-radius:999px;font-size:13px;font-weight:700;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.voice-badge.ok{background:var(--ball);color:#0b1d10}.voice-badge.no{color:#ff9a9a}
 .rec-badge i{width:10px;height:10px;border-radius:50%;background:var(--rec);animation:blink 1s infinite}
 @keyframes blink{50%{opacity:.2}}
 .prompt{position:absolute;left:50%;top:14px;transform:translateX(-50%);background:rgba(7,26,30,.94);border:2px solid var(--ball);border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:10px;align-items:center;width:min(92%,420px)}
@@ -133,6 +135,7 @@ input[type=range]{width:100%;accent-color:var(--ball)}
       <p>휴대폰을 삼각대에 고정하고 코트 전체가 보이게 비춰 주세요. 점수판이 영상에 함께 녹화됩니다.</p>
       <button class="btn-main" id="startCam">카메라 켜기</button>
     </div>
+    <div class="voice-badge" id="voiceBadge" hidden></div>
     <div class="rec-badge" id="recBadge" hidden><i></i><span id="recTime">00:00</span></div>
     <div class="prompt" id="prompt" hidden>
       <strong id="promptTxt">랠리 종료 감지 — 누가 이겼나요?</strong>
@@ -258,7 +261,9 @@ function callStr(){const s=S.serving,r=1-s;return cfg.mode==='doubles'?`${S.scor
 function gamePoint(){const t=cfg.target;const can=w=>S.score[w]>=t-1&&S.score[w]-S.score[1-w]>=1;return cfg.mode==='rally'?(can(0)||can(1)):can(S.serving);}
 let flash={team:-1,until:0}, banner={txt:'',until:0};
 
+let lastAutoAt=0;
 function rallyWon(w,source,keep){
+  if(source==='auto')lastAutoAt=performance.now();
   if(S.over){toast('게임이 끝났어요. "다음 게임"을 눌러 주세요');return;}
   snapshot();
   let scored=false;
@@ -442,13 +447,35 @@ async function finishRec(){
 
 /* ---------- 움직임 기반 랠리 감지 ---------- */
 const md=document.createElement('canvas');md.width=80;md.height=45;const mctx=md.getContext('2d',{willReadFrequently:true});
+let mMask=null,mMaskKey='';
+function motionFrame(){
+  // 화면 방향(rot)을 맞춘 작은 프레임 → 코트 좌표와 같은 기준
+  const side=rot%180!==0,MW=side?45:80,MH=side?80:45;
+  if(md.width!==MW||md.height!==MH){md.width=MW;md.height=MH;prev=null;}
+  mctx.save();
+  if(rot===90){mctx.translate(MW,0);mctx.rotate(Math.PI/2);mctx.drawImage(cam,0,0,MH,MW);}
+  else if(rot===270){mctx.translate(0,MH);mctx.rotate(-Math.PI/2);mctx.drawImage(cam,0,0,MH,MW);}
+  else if(rot===180){mctx.translate(MW,MH);mctx.rotate(Math.PI);mctx.drawImage(cam,0,0,MW,MH);}
+  else mctx.drawImage(cam,0,0,MW,MH);
+  mctx.restore();
+  // 코트를 맞춰 두었으면 코트(+주변 여유) 밖의 움직임은 무시 → 지나가는 사람·옆 코트 제외
+  const key=MW+'x'+MH+':'+(Hc?Hc.join(','):'');
+  if(key!==mMaskKey){mMaskKey=key;
+    if(!Hc)mMask=null;
+    else{mMask=new Uint8Array(MW*MH);let n=0;
+      for(let y=0;y<MH;y++)for(let x=0;x<MW;x++){const[cx,cy]=applyH(Hc,(x+.5)/MW*out.width,(y+.5)/MH*out.height);
+        if(cx>-4&&cx<24&&cy>-8&&cy<52){mMask[y*MW+x]=1;n++;}}
+      if(n<20)mMask=null;}
+  }
+  return [MW,MH];
+}
 let prev=null,ema=0,motionOn=false,inRally=false,aboveSince=0,quietSince=0,rallyStart=0,pending=null,pendingTimer=null;
 const thr=()=>12-cfg.sens;
 setInterval(()=>{
   if(!motionOn||cam.readyState<2)return;
-  mctx.drawImage(cam,0,0,80,45);const d=mctx.getImageData(0,0,80,45).data;
-  const g=new Uint8Array(3600);for(let i=0,j=0;i<d.length;i+=4,j++)g[j]=(d[i]*3+d[i+1]*6+d[i+2])/10;
-  if(prev){let s=0;for(let i=0;i<3600;i++)s+=Math.abs(g[i]-prev[i]);ema=ema*0.6+(s/3600)*0.4;}
+  const[MW,MH]=motionFrame(),N=MW*MH;const d=mctx.getImageData(0,0,MW,MH).data;
+  const g=new Uint8Array(N);for(let i=0,j=0;i<d.length;i+=4,j++)g[j]=(d[i]*3+d[i+1]*6+d[i+2])/10;
+  if(prev&&prev.length===N){let s=0,c=0;for(let i=0;i<N;i++){if(mMask&&!mMask[i])continue;s+=Math.abs(g[i]-prev[i]);c++;}ema=ema*0.6+(s/Math.max(1,c))*0.4;}
   prev=g;
   const T=thr(),now=performance.now(),rt=recording?recTime():0;
   $('#meterI').style.width=Math.min(100,ema/(T*2)*100)+'%';$('#meterB').style.left='50%';
@@ -457,7 +484,7 @@ setInterval(()=>{
   }else{
     if(ema<T*0.7){quietSince||=now;if(now-quietSince>cfg.quiet*1000){inRally=false;aboveSince=0;onRallyEnd(rallyStart,Math.max(0,rt-cfg.quiet));}}else quietSince=0;
   }
-  $('#motionStatus').innerHTML=inRally?'<em>랠리 진행 중</em>':'대기 중 · 움직임이 커지면 랠리 시작으로 판단';
+  $('#motionStatus').innerHTML=(inRally?'<em>랠리 진행 중</em>':'대기 중 · 움직임이 커지면 랠리 시작으로 판단')+(mMask?' · 코트 안쪽만 감지':' · <b style="color:var(--b)">코트 맞추기를 하면 지나가는 사람을 무시해요</b>');
 },120);
 function onRallyEnd(start,end){
   if(S.over)return;
@@ -476,26 +503,61 @@ function hidePrompt(){$('#prompt').hidden=true;pending=null;clearInterval(pendin
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;let sr=null,voiceOn=false;
 function startVoice(){
   if(!SR){toast('이 브라우저는 음성 인식을 지원하지 않아요 (크롬 권장)');setSw('#swVoice',false);voiceOn=false;return;}
-  sr=new SR();sr.lang='ko-KR';sr.continuous=true;sr.interimResults=false;
-  sr.onresult=e=>{const txt=e.results[e.results.length-1][0].transcript;handleVoice(txt);};
-  sr.onend=()=>{if(voiceOn)try{sr.start();}catch(e){}};
-  sr.onerror=e=>{$('#voiceStatus').textContent='오류: '+e.error;};
+  sr=new SR();sr.lang='ko-KR';sr.continuous=true;sr.interimResults=true;sr.maxAlternatives=5;
+  sr.onresult=e=>{
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      const r=e.results[i],alts=[];for(let k=0;k<r.length;k++)alts.push(r[k].transcript);
+      if(handleVoice(alts,r.isFinal))break;
+    }
+  };
+  sr.onend=()=>{if(voiceOn)setTimeout(()=>{try{sr.start();}catch(e){}},150);};
+  sr.onerror=e=>{if(e.error!=='no-speech'&&e.error!=='aborted')$('#voiceStatus').textContent='오류: '+e.error;};
   try{sr.start();$('#voiceStatus').textContent='듣는 중…';}catch(e){}
 }
-function handleVoice(raw){
-  const t=raw.replace(/\s/g,'').toLowerCase();
-  $('#voiceStatus').innerHTML=`들은 말: <em>${esc(raw)}</em>`;
-  const n=s=>s.replace(/\s/g,'').toLowerCase();
-  if(/취소|되돌|잘못/.test(t))return undo();
-  if(/무효|노카운트|다시|렛/.test(t)){if(pending){hidePrompt();toast('이번 랠리는 무효 처리했어요');}return;}
-  // 1) 팀 이름·선수 이름이 하나만 들리면 그 팀이 랠리 승 (서브팀이면 득점, 리시브팀이면 사이드아웃)
-  const plHit=i=>players(i).some(v=>t.includes(n(v)));
-  const isA=plHit(0)||t.includes(n(cfg.nameA))||/a팀|에이|^a$/.test(t), isB=plHit(1)||t.includes(n(cfg.nameB))||/b팀|비팀|^비$|^b$/.test(t);
-  if(isA!==isB)return rallyWon(isA?0:1,'voice');
-  // 2) 서브권이 넘어가는 말 → 점수 없이 서브권만 이동
-  if(/사이드|넘어|넘김|체인지|서브권|교대|실점|폴트|리시브|받는팀|리턴|점수없|노포인트/.test(t))return rallyWon(1-S.serving,'voice');
-  // 3) 득점하는 말 → 서브팀 득점
-  if(/득점|포인트|점수|서브팀|서브성공|플러스/.test(t))return rallyWon(S.serving,'voice');
+// 한국어 음성 인식이 자주 틀리게 받아쓰는 형태까지 포함
+const V_UNDO=/취소|되돌|잘못|취서|최소/;
+const V_VOID=/무효|노카운트|다시|렛|레트|let/;
+const V_SIDE=/사이드|사이다|싸이드|사이드아웃|넘어|넘김|체인지|체인치|서브권|교대|실점|폴트|리시브|받는팀|리턴|점수없|노포인트/;
+const V_PT=/득점|드금|득첨|덕점|포인트|점수|서브팀|서브성공|플러스|일점|1점/;
+const V_A=/a팀|에이|애이|8팀|팔팀|^a$|^에$|에이팀/, V_B=/b팀|비팀|삐|피팀|빗팀|^비$|^b$|비이/;
+let lastVoice={key:'',at:-1e9};
+function classifyVoice(t){
+  const n=x=>x.replace(/\s/g,'').toLowerCase();
+  if(V_UNDO.test(t))return 'undo';
+  if(V_VOID.test(t))return 'void';
+  const plHit=i=>players(i).some(v=>v.length>=2&&t.includes(n(v)));
+  const isA=plHit(0)||(cfg.nameA&&t.includes(n(cfg.nameA)))||V_A.test(t), isB=plHit(1)||(cfg.nameB&&t.includes(n(cfg.nameB)))||V_B.test(t);
+  if(isA!==isB)return isA?'A':'B';
+  if(V_SIDE.test(t))return 'side';
+  if(V_PT.test(t))return 'pt';
+  return null;
+}
+function voiceBadge(txt,cls){const b=$('#voiceBadge');b.hidden=false;b.className='voice-badge'+(cls?' '+cls:'');b.textContent=txt;clearTimeout(b._t);b._t=setTimeout(()=>b.hidden=true,3500);}
+function handleVoice(alts,isFinal){
+  if(typeof alts==='string')alts=[alts];
+  const raw=alts[0]||'';
+  let cmd=null;for(const a of alts){cmd=classifyVoice(a.replace(/\s/g,'').toLowerCase());if(cmd)break;}
+  if(isFinal!==false||cmd)$('#voiceStatus').innerHTML=`들은 말: <em>${esc(raw)}</em>${cmd?'':' (명령 아님)'}`;
+  if(!cmd){if(isFinal!==false&&pending)voiceBadge('음성: '+raw+' ?','no');return false;}
+  // 같은 명령이 연달아 두 번 들어오는 것 방지 (중간 결과 + 최종 결과, 크롬 중복 전달)
+  const now=performance.now();
+  if(now-lastVoice.at<2500&&cmd!=='undo')return true;
+  if(cmd==='undo'&&lastVoice.key==='undo'&&now-lastVoice.at<2500)return true;
+  // 움직임 감지를 켠 경우, 점수 명령은 랠리 종료 창이 떠 있을 때만 받음 (주변 대화로 점수가 바뀌는 것 방지)
+  let keep=null;
+  if(motionOn&&cmd!=='undo'&&cmd!=='void'&&!pending){
+    // 카운트다운이 끝나 자동 처리된 직후(6초 안)에 말하면 자동 처리를 고쳐 줌
+    const last=S.events[S.events.length-1];
+    if(last&&last.src==='auto'&&now-lastAutoAt<6000&&hist.length){S=JSON.parse(hist.pop());keep={t:last.t,clipStart:last.clipStart};}
+    else{if(isFinal!==false)voiceBadge('음성: '+raw+' (랠리 종료 후에 말해 주세요)','no');return true;}
+  }
+  lastVoice={key:cmd,at:now};
+  if(cmd==='undo'){undo();voiceBadge('음성: 취소','ok');return true;}
+  if(cmd==='void'){if(pending){hidePrompt();toast('이번 랠리는 무효 처리했어요');}voiceBadge('음성: 무효','ok');return true;}
+  const w=cmd==='A'?0:cmd==='B'?1:cmd==='side'?1-S.serving:S.serving;
+  const label=`${names()[w]} ${outcome(w)}`;
+  rallyWon(w,'voice',keep);voiceBadge('음성: '+label,'ok');beep(990,.08);
+  return true;
 }
 
 /* ---------- 선수 위치로 서브팀 인식 ---------- */
@@ -533,10 +595,11 @@ function classify(persons){
   const halves=[[],[]];
   for(const p of persons){
     const[x,y,w,h]=p.bbox,fx=x+w/2,fy=y+h;const[cx,cy]=applyH(Hc,fx,fy);
-    if(cx<-6||cx>26||cy<-12||cy>56)continue;
-    halves[cy<22?0:1].push({d:Math.abs(cy-22),fx,fy});
+    if(cx<-3||cx>23||cy<-8||cy>52)continue;
+    halves[cy<22?0:1].push({d:Math.abs(cy-22),fx,fy,cx});
   }
-  const pat=h=>{if(h.length<2)return null;const ds=h.map(p=>p.d).sort((a,b)=>a-b);
+  halves.forEach((h,i)=>{if(h.length>2){h.sort((a,b)=>Math.abs(a.cx-10)-Math.abs(b.cx-10));halves[i]=h.slice(0,2);}});
+  const pat=h=>{if(h.length!==2)return null;const ds=h.map(p=>p.d).sort((a,b)=>a-b);
     if(ds[0]>=NEAR)return 'serve';if(ds[0]<NEAR&&ds[ds.length-1]>=NEAR)return 'recv';return null;};
   const p0=pat(halves[0]),p1=pat(halves[1]);let srv=null;
   if(p0==='serve'&&p1!=='serve')srv=0;else if(p1==='serve'&&p0!=='serve')srv=1;
@@ -544,9 +607,9 @@ function classify(persons){
   return {halves,srv};
 }
 function guessServe(){
-  const v=posHist.filter(h=>h.srv!=null);if(v.length<2)return null;
+  const v=posHist.filter(h=>h.srv!=null);if(v.length<3)return null;
   const c0=v.filter(h=>h.srv===0).length,half=c0*2>=v.length?0:1,cnt=half===0?c0:v.length-c0;
-  return cnt/v.length>=0.6?halfTeam(half):null;
+  return cnt/v.length>=0.75?halfTeam(half):null;
 }
 function updatePosStatus(){
   const el=$('#posStatus');
