@@ -293,7 +293,7 @@ function rallyWon(w,source,keep){
   else if(cfg.mode==='doubles'&&S.server===1){S.server=2;}
   else{S.serving=1-S.serving;S.server=1;}
   const t=recording?recTime():null;
-  const ev={t,winner:w,scored,call:callStr(),score:[...S.score],game:S.game,clipStart:null,src:source,rank};
+  const ev={t,winner:w,scored,call:callStr(),score:[...S.score],game:S.game,clipStart:null,src:source,rank,rec:recording?recId:null};
   if(pending&&t!=null){ev.t=Math.min(t,pending.end+0.5);ev.clipStart=pending.start;}
   if(keep){ev.t=keep.t;ev.clipStart=keep.clipStart;}
   S.events.push(ev);
@@ -306,6 +306,7 @@ function rallyWon(w,source,keep){
   }
   if(scored&&S.score[w]>=cfg.target&&S.score[w]-S.score[1-w]>=2){
     S.over=true;S.gameWins[w]++;banner={txt:`GAME · ${names()[w]} 승`,until:performance.now()+4000};beep(880,.25);
+    if(cfg.games==='3'&&S.gameWins[w]>=2)banner={txt:`경기 종료 · ${names()[w]} 승리 (${S.gameWins[0]}:${S.gameWins[1]})`,until:performance.now()+6000};
   }
   hidePrompt();save();render();
   lastDecision={at:performance.now(),histLen:hist.length};
@@ -439,7 +440,7 @@ requestAnimationFrame(loop);
 /* ---------- 녹화 ---------- */
 const MIMES=['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
 const pickMime=()=>MIMES.find(m=>window.MediaRecorder&&MediaRecorder.isTypeSupported(m))||'';
-let recorder=null,recording=false,recStart=0,chunks=[],recEventsFrom=0,recTimer=null;
+let recId=0,recorder=null,recording=false,recStart=0,chunks=[],recEventsFrom=0,recTimer=null;
 const recTime=()=>(performance.now()-recStart)/1000;
 function startRec(){
   if(!stream){toast('먼저 카메라를 켜 주세요');return;}
@@ -449,7 +450,7 @@ function startRec(){
   recorder=new MediaRecorder(cs,{mimeType:mime||undefined,videoBitsPerSecond:cfg.res==='1080'?8e6:5e6});
   chunks=[];recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
   recorder.onstop=finishRec;
-  recorder.start(1000);recStart=performance.now();recording=true;recEventsFrom=S.events.length;
+  recorder.start(1000);recStart=performance.now();recording=true;recEventsFrom=S.events.length;recId=Date.now();
   $('#recBtn').classList.add('on');$('#recLbl').textContent='녹화 종료';$('#recBadge').hidden=false;
   recTimer=setInterval(()=>$('#recTime').textContent=fmt(recTime()),500);
 }
@@ -458,7 +459,7 @@ async function finishRec(){
   $('#recBtn').classList.remove('on');$('#recLbl').textContent='녹화 시작';$('#recBadge').hidden=true;
   const mime=recorder.mimeType||'video/webm';
   const blob=new Blob(chunks,{type:mime});
-  const evs=S.events.slice(recEventsFrom).filter(e=>e.t!=null);
+  const evs=S.events.filter(e=>e.rec===recId&&e.t!=null);
   const dur=recTime();
   const item={id:Date.now(),kind:'full',created:Date.now(),mime,blob,events:evs,duration:dur,
     title:`${cfg.nameA} vs ${cfg.nameB}`,teams:[cfg.nameA,cfg.nameB],players:[players(0),players(1)],colors:[cfg.colA,cfg.colB],
@@ -491,7 +492,7 @@ function motionFrame(){
   }
   return [MW,MH];
 }
-let prev=null,ema=0,motionOn=false,inRally=false,aboveSince=0,quietSince=0,rallyStart=0,pending=null,pendingTimer=null;
+let rallyStartAt=-1e9,prev=null,ema=0,motionOn=false,inRally=false,aboveSince=0,quietSince=0,rallyStart=0,pending=null,pendingTimer=null;
 const thr=()=>12-cfg.sens;
 setInterval(()=>{
   if(!motionOn||cam.readyState<2)return;
@@ -502,7 +503,7 @@ setInterval(()=>{
   const T=thr(),now=performance.now(),rt=recording?recTime():0;
   $('#meterI').style.width=Math.min(100,ema/(T*2)*100)+'%';$('#meterB').style.left='50%';
   if(!inRally){
-    if(ema>T){aboveSince||=now;if(now-aboveSince>600){inRally=true;rallyStart=Math.max(0,rt-0.6);quietSince=0;onRallyStart();}}else aboveSince=0;
+    if(ema>T){aboveSince||=now;if(now-aboveSince>600){inRally=true;rallyStartAt=now;rallyStart=Math.max(0,rt-0.6);quietSince=0;onRallyStart();}}else aboveSince=0;
   }else{
     if(ema<T*0.7){quietSince||=now;if(now-quietSince>cfg.quiet*1000){inRally=false;aboveSince=0;onRallyEnd(rallyStart,Math.max(0,rt-cfg.quiet));}}else quietSince=0;
   }
@@ -561,21 +562,27 @@ function handleVoice(alts,isFinal){
   let cmd=null;for(const a of alts){cmd=classifyVoice(a.replace(/\s/g,'').toLowerCase());if(cmd)break;}
   if(isFinal!==false||cmd)$('#voiceStatus').innerHTML=`들은 말: <em>${esc(raw)}</em>${cmd?'':' (명령 아님)'}`;
   if(!cmd){if(isFinal!==false&&pending)voiceBadge('음성: '+raw+' ?','no');return false;}
-  // 같은 명령이 연달아 두 번 들어오는 것 방지 (중간 결과 + 최종 결과, 크롬 중복 전달)
-  const now=performance.now();
-  if(now-lastVoice.at<2500&&cmd!=='undo')return true;
-  if(cmd==='undo'&&lastVoice.key==='undo'&&now-lastVoice.at<2500)return true;
-  // 움직임 감지를 켠 경우, 점수 명령은 랠리 종료 창이 떠 있을 때만 받음 (주변 대화로 점수가 바뀌는 것 방지)
+  const now=performance.now(),recent=now-lastVoice.at<2500;
+  // 같은 명령이 연달아 두 번 들어오면 한 번만 (중간 결과 + 최종 결과, 크롬 중복 전달)
+  if(recent&&cmd===lastVoice.key)return true;
+  const scoring=cmd!=='undo'&&cmd!=='void';
   let keep=null;
-  if(motionOn&&cmd!=='undo'&&cmd!=='void'&&!pending){
-    // 음성이 1순위: 직전 랠리를 버튼·위치·자동으로 판정했어도 다음 서브 전(8초 안)이면 음성으로 바꿈
-    const last=S.events[S.events.length-1];
-    if(last&&(last.rank||5)>1&&!inRally&&now-lastDecision.at<8000&&canRedo())keep=redoLast();
-    else{if(isFinal!==false)voiceBadge('음성: '+raw+' (랠리 종료 후에 말해 주세요)','no');return true;}
-  }
-  if(!keep&&!pending&&cmd!=='undo'&&cmd!=='void'){
-    const last=S.events[S.events.length-1];
-    if(last&&(last.rank||5)>1&&now-lastDecision.at<3000&&canRedo())keep=redoLast();
+  const last=S.events[S.events.length-1];
+  // 방금 음성으로 판정했는데 2.5초 안에 다른 말이 들리면 앞의 판정을 고침 (중간 인식이 틀렸던 경우)
+  if(scoring&&recent&&lastVoice.key!=='undo'&&lastVoice.key!=='void'&&last&&last.src==='voice'&&canRedo())keep=redoLast();
+  if(!keep&&scoring&&!pending){
+    const freshRally=inRally&&rallyStartAt>lastDecision.at+1000; // 직전 판정 뒤에 새 랠리가 시작됨
+    if(!freshRally&&last&&(last.rank||5)>1&&now-lastDecision.at<(motionOn?8000:3000)&&canRedo()){
+      // 음성이 1순위: 직전 랠리를 버튼·위치·자동으로 판정했어도 곧바로 말하면 음성으로 바꿈
+      keep=redoLast();
+    }else if(motionOn&&inRally){
+      // 랠리 종료를 감지하지 못했는데 말로 결과를 알려 준 경우 → 이 랠리를 끝내고 판정
+      inRally=false;aboveSince=0;quietSince=0;
+      keep={t:recording?recTime():null,clipStart:recording?rallyStart:null};
+    }else if(motionOn){
+      // 대기 중(랠리 아님)에 들린 말은 주변 대화일 수 있어 무시
+      if(isFinal!==false)voiceBadge('음성: '+raw+' (랠리 종료 후에 말해 주세요)','no');return true;
+    }
   }
   lastVoice={key:cmd,at:now};
   if(cmd==='undo'){undo();voiceBadge('음성: 취소','ok');return true;}
@@ -902,7 +909,13 @@ $('#startCam').onclick=startCam;$('#restartCam').onclick=startCam;
 $('#recBtn').onclick=()=>recording?stopRec():startRec();
 $('#tA').onclick=()=>rallyWon(0,'tap');$('#tB').onclick=()=>rallyWon(1,'tap');
 $('#pA').onclick=()=>rallyWon(0,'prompt');$('#pB').onclick=()=>rallyWon(1,'prompt');$('#pSkip').onclick=hidePrompt;
-$('#undo').onclick=undo;$('#newGame').onclick=newGame;
+$('#undo').onclick=undo;
+$('#newGame').onclick=function(){
+  if(S.over||(S.score[0]===0&&S.score[1]===0)){newGame();return;}
+  if(this.dataset.c){delete this.dataset.c;this.textContent='다음 게임';newGame();return;}
+  this.dataset.c=1;this.textContent='게임 중이에요 · 한 번 더 누르면 넘어가요';
+  setTimeout(()=>{delete this.dataset.c;this.textContent='다음 게임';},3000);
+};
 $('#swapSrv').onclick=()=>{snapshot();S.serving=1-S.serving;S.server=cfg.mode==='doubles'&&S.score[0]+S.score[1]===0?2:1;if(S.score[0]+S.score[1]===0)S.firstServer=S.serving;save();render();};
 $('#swMotion').onclick=()=>{motionOn=!motionOn;setSw('#swMotion',motionOn);
   if(!motionOn){$('#motionStatus').textContent='꺼짐';inRally=false;hidePrompt();}
