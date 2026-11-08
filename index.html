@@ -219,7 +219,7 @@ input[type=range]{width:100%;accent-color:var(--ball)}
           <label class="f" style="grid-column:1/-1">화면 방향<select id="rotate"><option value="auto">자동 (폰 기울기 감지)</option><option value="0">회전 안 함</option><option value="270">왼쪽으로 90° 돌리기</option><option value="90">오른쪽으로 90° 돌리기</option><option value="180">180° 뒤집기</option></select></label>
         </div>
         <div class="toggle"><span>소리 함께 녹음</span><button class="sw" role="switch" aria-checked="true" id="swMic"></button></div>
-        <button class="chip" id="restartCam">카메라 다시 연결</button>
+        <div class="chips"><button class="chip" id="restartCam">카메라 다시 연결</button><button class="chip" id="calibBtn2">코트 맞추기 · 수정</button></div>
       </div>
       <div class="box">
         <h3>랠리 감지 조정</h3>
@@ -994,7 +994,7 @@ $('#swPos').onclick=async()=>{
   try{await ensureModel();updatePosStatus();if(!cfg.calib)startCalib();}
   catch(e){posOn=false;setSw('#swPos',false);$('#posStatus').textContent='인식 모델을 불러오지 못했어요. 인터넷 연결을 확인해 주세요';}
 };
-$('#calibBtn').onclick=startCalib;$('#calibX').onclick=endCalib;$('#calibOk').onclick=saveCalib;$('#calibRedo').onclick=redoCalib;
+$('#calibBtn').onclick=startCalib;$('#calibBtn2').onclick=startCalib;$('#calibX').onclick=endCalib;$('#calibOk').onclick=saveCalib;$('#calibRedo').onclick=redoCalib;
 $('#swapSide').onclick=()=>{snapshot();S.swap=!S.swap;save();posHist=[];render();updatePosStatus();banner={txt:'코트 체인지',until:performance.now()+2000};toast(`아래쪽: ${names()[halfTeam(0)]} · 위쪽: ${names()[halfTeam(1)]}`);};
 $('#swAutoSide').onclick=()=>{cfg.autoSide=!cfg.autoSide;setSw('#swAutoSide',cfg.autoSide);saveCfg();};setSw('#swAutoSide',cfg.autoSide);
 $('#showPos').onclick=()=>{cfg.showPos=!cfg.showPos;saveCfg();$('#showPos').classList.toggle('on',!!cfg.showPos);};
