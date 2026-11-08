@@ -597,7 +597,7 @@ function handleVoice(alts,isFinal){
 const NEAR=13; // 네트에서 13ft(키친 7ft + 여유) 안쪽이면 '앞'
 const COURT=[[0,0],[20,0],[20,44],[0,44]];
 const dbg=$('#dbg'),dctx=dbg.getContext('2d');
-let rallyValid=true,posOn=false,posModel=null,posBusy=false,posHist=[],lastDet=null,calibMode=0,calibPts=[],Hc=null,Hinv=null;
+let lastFull=null,prevServe=null,lastInfer='',rallyValid=true,posOn=false,posModel=null,posBusy=false,posHist=[],lastDet=null,calibMode=0,calibPts=[],Hc=null,Hinv=null;
 const halfTeam=h=>S.swap?1-h:h;
 function loadScript(src){return new Promise((res,rej)=>{const el=document.createElement('script');el.src=src;el.onload=res;el.onerror=()=>rej(new Error(src));document.head.appendChild(el);});}
 async function ensureModel(){
@@ -624,12 +624,23 @@ function buildH(){
   const px=cfg.calib.map(([nx,ny])=>[nx*out.width,ny*out.height]);
   Hc=solveH(px,COURT);Hinv=solveH(COURT,px);
 }
+const cc=document.createElement('canvas');cc.width=6;cc.height=6;const cctx=cc.getContext('2d',{willReadFrequently:true});
+function meanColor(x,y,w,h){
+  if(w<2||h<2)return [0,0,0];
+  try{cctx.drawImage(out,x,y,w,h,0,0,6,6);const d=cctx.getImageData(0,0,6,6).data;let r=0,g=0,b=0;
+    for(let i=0;i<d.length;i+=4){r+=d[i];g+=d[i+1];b+=d[i+2];}const n=d.length/4;return [r/n,g/n,b/n];}catch(e){return [0,0,0];}
+}
+function personDesc(x,y,w,h){
+  const top=meanColor(x+w*.25,y+h*.18,w*.5,h*.3),leg=meanColor(x+w*.3,y+h*.52,w*.4,h*.25);
+  return [...top,...leg];
+}
+const cdist=(a,b)=>Math.hypot(...a.map((v,i)=>v-b[i]));
 function classify(persons){
   const halves=[[],[]];
   for(const p of persons){
     const[x,y,w,h]=p.bbox,fx=x+w/2,fy=y+h;const[cx,cy]=applyH(Hc,fx,fy);
     if(cx<-3||cx>23||cy<-8||cy>52)continue;
-    halves[cy<22?0:1].push({d:Math.abs(cy-22),fx,fy,cx});
+    halves[cy<22?0:1].push({d:Math.abs(cy-22),fx,fy,cx,desc:personDesc(x,y,w,h)});
   }
   halves.forEach((h,i)=>{if(h.length>2){h.sort((a,b)=>Math.abs(a.cx-10)-Math.abs(b.cx-10));halves[i]=h.slice(0,2);}});
   const pat=h=>{if(h.length!==2)return null;const ds=h.map(p=>p.d).sort((a,b)=>a-b);
@@ -637,7 +648,41 @@ function classify(persons){
   const p0=pat(halves[0]),p1=pat(halves[1]);let srv=null;
   if(p0==='serve'&&p1!=='serve')srv=0;else if(p1==='serve'&&p0!=='serve')srv=1;
   else if(p0==='recv'&&p1!=='recv')srv=1;else if(p1==='recv'&&p0!=='recv')srv=0;
+  halves.forEach(h=>h.sort((a,b)=>a.cx-b.cx)); // 코트 기준 왼쪽 → 오른쪽
   return {halves,srv};
+}
+// 두 스냅샷 사이에 한 팀의 두 선수가 좌우를 바꿨는지: true / false / null(구분 불가)
+function swappedPair(prev,cur){
+  if(!prev||!cur||prev.length!==2||cur.length!==2)return null;
+  if(cdist(prev[0].desc,prev[1].desc)<45||cdist(cur[0].desc,cur[1].desc)<45)return null; // 두 사람 옷 색이 비슷하면 판단 안 함
+  const same=cdist(prev[0].desc,cur[0].desc)+cdist(prev[1].desc,cur[1].desc);
+  const cross=cdist(prev[0].desc,cur[1].desc)+cdist(prev[1].desc,cur[0].desc);
+  if(cross<same*0.65)return true;if(same<cross*0.65)return false;return null;
+}
+// 이번 서브 대형과 지난 서브 대형을 비교해 직전 랠리의 승자를 추론
+//  · 다른 팀이 서브 → 사이드아웃 (리시브팀 승)
+//  · 같은 팀 서브 + 서브팀 두 명이 좌우 교대 → 득점 (서브팀 승)
+//  · 같은 팀 서브 + 아무도 안 바꿈 → 2번 서버로 (리시브팀 승)
+function inferPrevWinner(team,snap){
+  const p=prevServe;lastInfer='';
+  if(!p||team==null)return null;
+  if(S.events.length!==p.evCount+1)return null; // 사이에 판정이 정확히 하나일 때만
+  if(team!==p.team){lastInfer='다른 팀 서브 → 사이드아웃';return 1-p.team;}
+  if(!snap||!p.snap||p.swap!==S.swap){lastInfer='';return null;}
+  const half=S.swap?1-team:team,rh=1-half;
+  const sv=swappedPair(p.snap.halves[half],snap.halves[half]),rv=swappedPair(p.snap.halves[rh],snap.halves[rh]);
+  if(rv===true){lastInfer='리시브팀도 자리가 바뀐 것처럼 보여 판단 보류';return null;}
+  if(sv===true){lastInfer='서브팀 좌우 교대 → 득점';return p.team;}
+  if(sv===false){lastInfer='서브팀 자리 그대로 → 2번 서버 (점수 없음)';return 1-p.team;}
+  lastInfer='옷 색이 비슷해 좌우 교대를 구분 못 함';return null;
+}
+// 승자 w로 판정했을 때 지금 서브팀이 team이 되는지 (규칙과 맞는지) 확인
+function consistentWith(stateJSON,w,team){
+  const T=JSON.parse(stateJSON);
+  if(cfg.mode==='rally')return w===team;
+  if(w===T.serving)return T.serving===team;
+  if(cfg.mode==='doubles'&&T.server===1)return T.serving===team;
+  return 1-T.serving===team;
 }
 function guessServe(){
   const v=posHist.filter(h=>h.srv!=null);if(v.length<3)return null;
@@ -652,7 +697,7 @@ function updatePosStatus(){
   if(!lastDet){el.textContent='선수를 찾는 중…';return;}
   const desc=h=>h.length?h.map(p=>p.d<NEAR?'앞':'뒤').join('·'):'없음';
   const g=guessServe();
-  el.innerHTML=`${esc(names()[halfTeam(0)])} 쪽 ${desc(lastDet.halves[0])} · ${esc(names()[halfTeam(1)])} 쪽 ${desc(lastDet.halves[1])}${g!=null?` → <em>${esc(names()[g])} 서브</em>`:''}`;
+  el.innerHTML=(lastInfer?`<b>지난 랠리: ${esc(lastInfer)}</b><br>`:'')+`${esc(names()[halfTeam(0)])} 쪽 ${desc(lastDet.halves[0])} · ${esc(names()[halfTeam(1)])} 쪽 ${desc(lastDet.halves[1])}${g!=null?` → <em>${esc(names()[g])} 서브</em>`:''}`;
 }
 setInterval(async()=>{
   if(!posOn||!posModel||posBusy||cam.readyState<2||!Hc||inRally)return;
@@ -660,7 +705,8 @@ setInterval(async()=>{
   try{
     const r=await posModel.detect(out,12,0.35);
     const c=classify(r.filter(o=>o.class==='person'));const now=performance.now();
-    lastDet={...c,t:now};posHist.push({t:now,srv:c.srv});posHist=posHist.filter(h=>now-h.t<3000);
+    lastDet={...c,t:now};posHist.push({t:now,srv:c.srv});
+    if(c.halves[0].length===2&&c.halves[1].length===2)lastFull={halves:c.halves,t:now};posHist=posHist.filter(h=>now-h.t<3000);
     updatePosStatus();
   }catch(e){console.error(e);}
   posBusy=false;
@@ -672,14 +718,32 @@ function onRallyStart(){
   if(!posOn||cfg.mode!=='doubles'||S.over)return;
   const team=guessServe();const hadDet=posHist.length>=2&&!!Hc;posHist=[];
   if(team==null&&hadDet){rallyValid=false;$('#motionStatus').innerHTML='서브 대형이 아니어서 랠리로 보지 않아요 (선수 이동 중)';return;}
-  if(team==null||team===S.serving)return;
+  const snap=lastFull&&performance.now()-lastFull.t<3500?lastFull:null;
+  const inferred=inferPrevWinner(team,snap);
+  if(team!=null)prevServe={team,snap,swap:S.swap,evCount:S.events.length};
   const last=S.events[S.events.length-1];
+  if(inferred!=null&&last&&last.winner!==inferred){
+    const before=canRedo()?hist[hist.length-1]:null;
+    if(before&&consistentWith(before,inferred,team)){
+      if((last.rank||5)>=4){
+        const keep=redoLast();rallyWon(inferred,'pos',keep);prevServe.evCount=S.events.length;
+        toast(`위치로 고쳤어요: ${lastInfer} (${names()[inferred]} ${S.events[S.events.length-1].scored?'득점':'랠리 승'})`);
+      }else{
+        banner={txt:`${lastInfer}?`,until:performance.now()+2500};
+        toast(`위치로 보면 ${lastInfer}. ${RANK_LABEL[last.rank]} 판정을 우선해 그대로 둬요`);
+      }
+      updatePosStatus();return;
+    }
+  }
+  updatePosStatus();
+  if(team==null||team===S.serving)return;
   if(last&&(last.rank||5)>=4&&canRedo()){
     // 직전 랠리를 늦은 버튼·자동으로 판정했는데 다른 팀이 서브 → 리시브팀이 이긴 것으로 고침
     const keep=redoLast();
     rallyWon(1-S.serving,'pos',keep);
     if(S.serving!==team){snapshot();S.serving=team;S.server=1;save();render();}
     toast(`서브 위치를 보고 고쳤어요: ${names()[team]} 서브`);
+    if(prevServe)prevServe.evCount=S.events.length;
   }else{
     banner={txt:`${names()[team]} 서브 같아요?`,until:performance.now()+2500};
     toast(`선수 위치로는 ${names()[team]} 서브예요. (${RANK_LABEL[last?last.rank:2]||'직접'} 판정을 우선해 그대로 둬요) 맞으면 "서브 팀 변경"을 눌러 주세요`);
