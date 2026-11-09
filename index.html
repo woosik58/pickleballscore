@@ -693,24 +693,53 @@ function updatePosStatus(){
   const el=$('#posStatus');
   if(!posOn){el.textContent='꺼짐';return;}
   if(!Hc){el.textContent='먼저 "코트 맞추기"로 코트 네 모서리를 찍어 주세요';return;}
-  if(inRally){el.textContent='랠리 중 · 인식 쉬는 중';return;}
+  if(inRally){el.textContent=`랠리 중 · 선수 추적 중 (${detFps.toFixed(1)}회/초)`;return;}
   if(!lastDet){el.textContent='선수를 찾는 중…';return;}
   const desc=h=>h.length?h.map(p=>p.d<NEAR?'앞':'뒤').join('·'):'없음';
   const g=guessServe();
   el.innerHTML=(lastInfer?`<b>지난 랠리: ${esc(lastInfer)}</b><br>`:'')+`${esc(names()[halfTeam(0)])} 쪽 ${desc(lastDet.halves[0])} · ${esc(names()[halfTeam(1)])} 쪽 ${desc(lastDet.halves[1])}${g!=null?` → <em>${esc(names()[g])} 서브</em>`:''}`;
 }
-setInterval(async()=>{
-  if(!posOn||!posModel||posBusy||cam.readyState<2||!Hc||inRally)return;
-  posBusy=true;
-  try{
-    const r=await posModel.detect(out,12,0.35);
-    const c=classify(r.filter(o=>o.class==='person'));const now=performance.now();
-    lastDet={...c,t:now};posHist.push({t:now,srv:c.srv});
-    if(c.halves[0].length===2&&c.halves[1].length===2)lastFull={halves:c.halves,t:now};posHist=posHist.filter(h=>now-h.t<3000);
-    updatePosStatus();
-  }catch(e){console.error(e);}
-  posBusy=false;
-},400);
+/* 선수 인식 루프: 끝나자마자 다음 프레임 (고정 간격 X), 작은 이미지로 빠르게, 랠리 중에도 계속 추적 */
+const detCv=document.createElement('canvas'),detCtx=detCv.getContext('2d');
+let tracks=[];
+function updateTracks(pts,tCap){
+  const maxD=out.width*0.12,used=new Set();
+  for(const tr of tracks){
+    let bi=-1,bd=maxD;
+    pts.forEach((p,i)=>{if(used.has(i))return;const d=Math.hypot(p.fx-tr.fx,p.fy-tr.fy);if(d<bd){bd=d;bi=i;}});
+    if(bi<0)continue;used.add(bi);
+    const p=pts[bi],dt=Math.max(0.05,(tCap-tr.t)/1000);
+    tr.vx=tr.vx*0.4+((p.fx-tr.fx)/dt)*0.6;tr.vy=tr.vy*0.4+((p.fy-tr.fy)/dt)*0.6;
+    const vmax=out.width*1.2,v=Math.hypot(tr.vx,tr.vy);if(v>vmax){tr.vx*=vmax/v;tr.vy*=vmax/v;}
+    tr.fx=p.fx;tr.fy=p.fy;tr.t=tCap;tr.seen=tCap;
+  }
+  pts.forEach((p,i)=>{if(!used.has(i))tracks.push({fx:p.fx,fy:p.fy,vx:0,vy:0,t:tCap,seen:tCap});});
+  tracks=tracks.filter(tr=>tCap-tr.seen<800);
+}
+let detFps=0;
+async function detLoop(){
+  for(;;){
+    const ready=posOn&&posModel&&cam.readyState>=2&&Hc&&out.width;
+    if(!ready){await new Promise(r=>setTimeout(r,300));continue;}
+    try{
+      const sc=Math.min(1,416/out.width);detCv.width=Math.round(out.width*sc);detCv.height=Math.round(out.height*sc);
+      const tCap=performance.now();detCtx.drawImage(out,0,0,detCv.width,detCv.height);
+      const r=await posModel.detect(detCv,12,0.3);
+      const persons=r.filter(o=>o.class==='person').map(o=>({...o,bbox:o.bbox.map(v=>v/sc)}));
+      const c=classify(persons);const now=performance.now();
+      detFps=detFps*0.8+(1000/Math.max(1,now-tCap))*0.2;
+      updateTracks([...c.halves[0],...c.halves[1]],tCap);
+      lastDet={...c,t:now};
+      if(!inRally){ // 서브 대형 판단은 랠리 사이 장면만 사용
+        posHist.push({t:now,srv:c.srv});posHist=posHist.filter(h=>now-h.t<3000);
+        if(c.halves[0].length===2&&c.halves[1].length===2)lastFull={halves:c.halves,t:now};
+      }
+      updatePosStatus();
+    }catch(e){console.error(e);await new Promise(r=>setTimeout(r,500));}
+    await new Promise(r=>setTimeout(r,30));
+  }
+}
+detLoop();
 function onRallyStart(){
   // 카운트다운이 끝나기 전에 다음 서브가 시작되면 기본값(서브팀 승)을 먼저 확정
   if(pending&&!$('#prompt').hidden){clearInterval(pendingTimer);rallyWon(S.serving,'auto');}
@@ -827,8 +856,14 @@ function drawDbg(){
     [0,1].forEach(h=>{const[x,y]=applyH(Hinv,10,h?36:8);c.font=`800 ${22*u}px "Noto Sans KR",sans-serif`;c.textAlign='center';c.lineWidth=5*u;c.strokeStyle='rgba(0,0,0,.7)';
       const t=names()[halfTeam(h)];c.strokeText(t,x,y);c.fillStyle=cols()[halfTeam(h)];c.fillText(t,x,y);});
   }
-  if(lastDet)lastDet.halves.forEach(hv=>hv.forEach(p=>{const near=p.d<NEAR;c.fillStyle=near?'#ff4d4d':'#3ee07a';c.beginPath();c.arc(p.fx,p.fy,9*u,0,7);c.fill();
-    c.font=`800 ${15*u}px "Noto Sans KR",sans-serif`;c.textAlign='center';c.lineWidth=4*u;c.strokeStyle='rgba(0,0,0,.7)';c.strokeText(near?'앞':'뒤',p.fx,p.fy-16*u);c.fillStyle='#fff';c.fillText(near?'앞':'뒤',p.fx,p.fy-16*u);}));
+  if(Hc){const now=performance.now();
+    for(const tr of tracks){
+      const dt=Math.min(0.35,(now-tr.t)/1000),x=tr.fx+tr.vx*dt,y=tr.fy+tr.vy*dt;
+      const[cx,cy]=applyH(Hc,x,y);if(cx<-3||cx>23||cy<-8||cy>52)continue;
+      const near=Math.abs(cy-22)<NEAR;c.fillStyle=near?'#ff4d4d':'#3ee07a';c.beginPath();c.arc(x,y,9*u,0,7);c.fill();
+      c.font=`800 ${15*u}px "Noto Sans KR",sans-serif`;c.textAlign='center';c.lineWidth=4*u;c.strokeStyle='rgba(0,0,0,.7)';c.strokeText(near?'앞':'뒤',x,y-16*u);c.fillStyle='#fff';c.fillText(near?'앞':'뒤',x,y-16*u);
+    }
+    c.font=`700 ${13*u}px sans-serif`;c.textAlign='left';c.fillStyle='rgba(255,255,255,.8)';c.fillText(`인식 ${detFps.toFixed(1)}회/초`,10*u,H-10*u);}
 }
 
 /* ---------- 효과음 ---------- */
